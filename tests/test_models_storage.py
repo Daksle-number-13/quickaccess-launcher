@@ -46,11 +46,11 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertFalse(config.welcome_shown)
         self.assertEqual(3, config.columns)
         self.assertEqual(
-            [r"C:\AI Program", str(home / "Downloads"), str(home / "Documents")],
+            [str(home / "Downloads"), str(home / "Documents")],
             [item.path for item in config.items],
         )
-        self.assertEqual([0, 1, 2], [item.order for item in config.items])
-        self.assertEqual(3, len({item.id for item in config.items}))
+        self.assertEqual([0, 1], [item.order for item in config.items])
+        self.assertEqual(2, len({item.id for item in config.items}))
         self.assertTrue(all(item.type == "folder" for item in config.items))
 
     def test_legacy_list_migrates_missing_fields_and_duplicate_ids(self) -> None:
@@ -162,7 +162,7 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             self.assertIn("welcome_shown", payload)
             self.assertEqual("system", payload["appearance_mode"])
-            self.assertEqual([0, 1, 2], [item["order"] for item in payload["items"]])
+            self.assertEqual([0, 1], [item["order"] for item in payload["items"]])
 
     def test_save_is_atomic_and_round_trips(self) -> None:
         with writable_test_directory() as temporary_directory:
@@ -184,7 +184,7 @@ class ConfigStoreTests(unittest.TestCase):
     def test_legacy_schema_is_migrated_and_rewritten(self) -> None:
         with writable_test_directory() as temporary_directory:
             path = Path(temporary_directory) / "items.json"
-            legacy = [{"name": "AI", "path": r"C:\AI Program", "type": "folder"}]
+            legacy = [{"name": "업무", "path": r"C:\Work", "type": "folder"}]
             path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
 
             result = ConfigStore(path).load()
@@ -211,7 +211,7 @@ class ConfigStoreTests(unittest.TestCase):
             assert result.backup_path is not None
             self.assertTrue(result.backup_path.exists())
             self.assertEqual(corrupt_bytes, result.backup_path.read_bytes())
-            self.assertEqual(3, len(result.config.items))
+            self.assertEqual(2, len(result.config.items))
             self.assertIsInstance(json.loads(path.read_text(encoding="utf-8")), dict)
 
     def test_invalid_object_schema_is_recovered_like_corrupt_json(self) -> None:
@@ -223,7 +223,7 @@ class ConfigStoreTests(unittest.TestCase):
 
             self.assertTrue(result.recovered)
             self.assertIsNotNone(result.backup_path)
-            self.assertEqual(3, len(result.config.items))
+            self.assertEqual(2, len(result.config.items))
 
     def test_invalid_item_is_removed_only_after_original_is_backed_up(self) -> None:
         with writable_test_directory() as temporary_directory:

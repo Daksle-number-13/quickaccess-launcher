@@ -31,7 +31,6 @@ python main.py
 실행하면 일반 창은 뜨지 않고 시스템 트레이에 상주합니다. 첫 실행 시 다음
 기본 항목이 생성됩니다.
 
-- `C:\AI Program`
 - 현재 사용자의 `Downloads`
 - 현재 사용자의 `Documents`
 

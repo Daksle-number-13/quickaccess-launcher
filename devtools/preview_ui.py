@@ -28,9 +28,8 @@ def sample_config() -> LauncherConfig:
         items=[
             LauncherItem(name="품질 문서", path=r"C:\Quality\Documents", type="folder", order=0),
             LauncherItem(name="불량 집계", path=r"C:\Quality\Reports\불량집계.xlsx", type="file", order=1),
-            LauncherItem(name="AI Program", path=r"C:\AI Program", type="folder", order=2),
-            LauncherItem(name="주간 회의록", path=r"C:\Quality\Meetings\2026", type="folder", order=3),
-            LauncherItem(name="검사 기준서", path=r"Z:\Shared\검사 기준서.pdf", type="file", order=4),
+            LauncherItem(name="주간 회의록", path=r"C:\Quality\Meetings\2026", type="folder", order=2),
+            LauncherItem(name="검사 기준서", path=r"Z:\Shared\검사 기준서.pdf", type="file", order=3),
         ],
     )
 

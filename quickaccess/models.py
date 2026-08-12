@@ -187,22 +187,16 @@ class LauncherConfig:
         return cls(
             items=[
                 LauncherItem(
-                    name="AI Program",
-                    path=r"C:\AI Program",
-                    type="folder",
-                    order=0,
-                ),
-                LauncherItem(
                     name="다운로드",
                     path=str(home / "Downloads"),
                     type="folder",
-                    order=1,
+                    order=0,
                 ),
                 LauncherItem(
                     name="문서",
                     path=str(home / "Documents"),
                     type="folder",
-                    order=2,
+                    order=1,
                 ),
             ]
         )

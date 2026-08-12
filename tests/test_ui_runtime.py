@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
+import time
 import unittest
 
 import customtkinter as ctk
@@ -74,7 +75,10 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(int(window._add_folder_button.grid_info()["row"]), 1)
         self.assertEqual(int(window._add_file_button.grid_info()["row"]), 1)
         window._select_page("preferences")
-        self.root.update()
+        deadline = time.monotonic() + 0.5
+        while not window.winfo_viewable() and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
         self.assertTrue(window.winfo_viewable())
         client_right = window.winfo_rootx() + window.winfo_width()
         for widget in (
