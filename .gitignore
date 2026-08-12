@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.build-python*/
+python-*-amd64.exe
+build/
+dist/
+*.spec.bak
+
+# Local signing credentials must never enter source control.
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+
+# Local UI review captures and OS metadata.
+devtools/*-preview.png
+Thumbs.db
+.DS_Store

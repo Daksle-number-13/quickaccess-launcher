@@ -1,0 +1,4 @@
+-r requirements.txt
+PyInstaller==6.19.0
+pytest==9.0.2
+

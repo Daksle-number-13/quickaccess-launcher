@@ -1,0 +1,4 @@
+customtkinter==5.2.2
+Pillow==12.3.0
+pystray==0.19.5
+pywin32==311; sys_platform == "win32"

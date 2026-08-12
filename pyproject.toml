@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quickaccess-launcher"
+version = "1.0.0"
+description = "A cursor-positioned Windows quick launcher for files and folders"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter==5.2.2",
+    "Pillow==12.3.0",
+    "pystray==0.19.5",
+    "pywin32==311; sys_platform == 'win32'",
+]
+
+[project.scripts]
+quickaccess = "quickaccess.app:main"
+
+[tool.setuptools.packages.find]
+include = ["quickaccess*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
