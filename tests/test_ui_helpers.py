@@ -52,6 +52,9 @@ class PopupDimensionsTests(unittest.TestCase):
         self.assertGreater(height, 2 * BUTTON_HEIGHT)
         self.assertGreaterEqual(viewport, BUTTON_HEIGHT)
 
+    def test_launcher_cards_are_no_wider_than_two_to_one(self) -> None:
+        self.assertLessEqual(BUTTON_WIDTH / BUTTON_HEIGHT, 2.0)
+
     def test_reduces_columns_when_item_count_is_smaller(self) -> None:
         _width, _height, columns, _viewport = popup_dimensions(
             1,
@@ -68,7 +71,7 @@ class PopupDimensionsTests(unittest.TestCase):
         )
         self.assertLessEqual(width, 624)
         self.assertLessEqual(height, 344)
-        self.assertEqual(columns, 3)
+        self.assertEqual(columns, 4)
 
     def test_empty_state_keeps_a_compact_readable_width(self) -> None:
         width, height, columns, viewport = popup_dimensions(

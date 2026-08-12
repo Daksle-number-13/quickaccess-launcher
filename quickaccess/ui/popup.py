@@ -38,7 +38,7 @@ from .theme import (
 )
 
 
-BUTTON_WIDTH = 184
+BUTTON_WIDTH = 136
 BUTTON_HEIGHT = 68
 GAP = 8
 PADDING = 12
@@ -48,7 +48,6 @@ HEADER_GAP = 10
 _GLYPH_FOLDER = "\uE8B7"
 _GLYPH_FILE = "\uE8A5"
 _GLYPH_SETTINGS = "\uE713"
-_GLYPH_CHEVRON = "\uE76C"
 _TRANSPARENT_KEY = "#010203"
 
 
@@ -196,26 +195,26 @@ class _LauncherCard(ctk.CTkFrame):
 
         icon_tile = ctk.CTkFrame(
             self,
-            width=38,
-            height=38,
-            corner_radius=11,
+            width=34,
+            height=34,
+            corner_radius=10,
             fg_color=SURFACE if self._broken else ACCENT_SOFT,
         )
-        icon_tile.grid(row=0, column=0, rowspan=2, padx=(10, 9), pady=14)
+        icon_tile.grid(row=0, column=0, rowspan=2, padx=(8, 7), pady=16)
         icon_tile.grid_propagate(False)
         if icon is not None and not self._broken:
             # A real shell icon is only shown once one has actually been
             # extracted; the broken-path glyph coloring always wins so the
             # card still reads as needing attention.
-            icon_label = ctk.CTkLabel(icon_tile, text="", image=icon, width=38, height=38)
+            icon_label = ctk.CTkLabel(icon_tile, text="", image=icon, width=34, height=34)
         else:
             glyph = _GLYPH_FOLDER if item.type == "folder" else _GLYPH_FILE
             icon_label = ctk.CTkLabel(
                 icon_tile,
                 text=glyph,
-                width=38,
-                height=38,
-                font=icon_font(17),
+                width=34,
+                height=34,
+                font=icon_font(16),
                 text_color=self._resting_border if self._broken else ACCENT,
             )
         icon_label.pack(fill="both", expand=True)
@@ -223,13 +222,13 @@ class _LauncherCard(ctk.CTkFrame):
 
         name_label = ctk.CTkLabel(
             self,
-            text=_ellipsize(item.name),
+            text=_ellipsize(item.name, 10),
             height=22,
-            font=font(12, "bold"),
+            font=font(11, "bold"),
             text_color=TEXT,
             anchor="w",
         )
-        name_label.grid(row=0, column=1, padx=(0, 4), pady=(11, 0), sticky="sew")
+        name_label.grid(row=0, column=1, padx=(0, 8), pady=(11, 0), sticky="sew")
         status_label = ctk.CTkLabel(
             self,
             text=_status_text(item, status),
@@ -238,16 +237,7 @@ class _LauncherCard(ctk.CTkFrame):
             text_color=self._status_color,
             anchor="w",
         )
-        status_label.grid(row=1, column=1, padx=(0, 4), pady=(0, 11), sticky="new")
-
-        chevron = ctk.CTkLabel(
-            self,
-            text=_GLYPH_CHEVRON,
-            width=22,
-            font=icon_font(10),
-            text_color=self._status_color,
-        )
-        chevron.grid(row=0, column=2, rowspan=2, padx=(0, 7), sticky="e")
+        status_label.grid(row=1, column=1, padx=(0, 8), pady=(0, 11), sticky="new")
 
         self._interactive_widgets: tuple[tk.Misc, ...] = (
             self,
@@ -255,7 +245,6 @@ class _LauncherCard(ctk.CTkFrame):
             icon_label,
             name_label,
             status_label,
-            chevron,
         )
         for widget in self._interactive_widgets:
             widget.bind("<Button-1>", self._invoke, add="+")
@@ -491,7 +480,7 @@ class PopupPanel(ctk.CTkToplevel):
         shell.grid_columnconfigure(0, weight=1)
         shell.grid_rowconfigure(1, weight=1)
 
-        self._build_header(shell, len(config.items))
+        self._build_header(shell, len(config.items), compact=columns == 1)
 
         rows = max(1, math.ceil(len(config.items) / columns))
         self._layout_columns = columns
@@ -572,7 +561,13 @@ class PopupPanel(ctk.CTkToplevel):
         finally:
             self._arming_focus = False
 
-    def _build_header(self, shell: ctk.CTkFrame, item_count: int) -> None:
+    def _build_header(
+        self,
+        shell: ctk.CTkFrame,
+        item_count: int,
+        *,
+        compact: bool,
+    ) -> None:
         header = ctk.CTkFrame(
             shell,
             height=HEADER_HEIGHT,
@@ -586,36 +581,37 @@ class PopupPanel(ctk.CTkToplevel):
         brand_mark = ctk.CTkLabel(
             header,
             text="",
-            image=brand_image(30),
-            width=30,
-            height=30,
+            image=brand_image(24 if compact else 30),
+            width=24 if compact else 30,
+            height=24 if compact else 30,
             fg_color="transparent",
         )
-        brand_mark.grid(row=0, column=0, padx=(0, 9))
+        brand_mark.grid(row=0, column=0, padx=(0, 6 if compact else 9))
         ctk.CTkLabel(
             header,
             text="QuickAccess",
-            font=font(14, "bold"),
+            font=font(12 if compact else 14, "bold"),
             text_color=TEXT,
             anchor="w",
         ).grid(row=0, column=1, sticky="w")
-        ctk.CTkLabel(
-            header,
-            text=f"{item_count}개",
-            width=42,
-            height=24,
-            corner_radius=12,
-            fg_color=ACCENT_SOFT,
-            text_color=ACCENT,
-            font=font(10, "bold"),
-        ).grid(row=0, column=2, padx=(8, 7))
+        if not compact:
+            ctk.CTkLabel(
+                header,
+                text=f"{item_count}개",
+                width=42,
+                height=24,
+                corner_radius=12,
+                fg_color=ACCENT_SOFT,
+                text_color=ACCENT,
+                font=font(10, "bold"),
+            ).grid(row=0, column=2, padx=(8, 7))
         ctk.CTkButton(
             header,
             text=_GLYPH_SETTINGS,
-            width=32,
-            height=32,
-            corner_radius=10,
-            font=icon_font(15),
+            width=28 if compact else 32,
+            height=28 if compact else 32,
+            corner_radius=9 if compact else 10,
+            font=icon_font(14 if compact else 15),
             fg_color="transparent",
             hover_color=SURFACE_HOVER,
             text_color=MUTED,
