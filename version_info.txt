@@ -15,11 +15,11 @@ VSVersionInfo(
       StringTable(
         u'041204B0',
         [
-          StringStruct(u'CompanyName', u'Hansol Quality Team'),
+          StringStruct(u'CompanyName', u'Daksle'),
           StringStruct(u'FileDescription', u'QuickAccess Launcher'),
           StringStruct(u'FileVersion', u'1.1.0.0'),
           StringStruct(u'InternalName', u'QuickAccess'),
-          StringStruct(u'LegalCopyright', u'Copyright 2026 Hansol Quality Team'),
+          StringStruct(u'LegalCopyright', u'Copyright 2026 Park Jin-Su'),
           StringStruct(u'OriginalFilename', u'QuickAccess.exe'),
           StringStruct(u'ProductName', u'QuickAccess Launcher'),
           StringStruct(u'ProductVersion', u'1.1.0.0')

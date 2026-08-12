@@ -63,6 +63,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 set_appearance_mode=lambda _mode: True,
                 set_columns=lambda _columns: True,
                 set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
                 set_hotkeys=lambda _panel, _quick: True,
             ),
         )
@@ -91,6 +92,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             window._panel_hotkey,
             window._quick_hotkey,
             window._startup,
+            window._updates,
         ):
             self.assertLessEqual(
                 widget.winfo_rootx() + widget.winfo_width(),
@@ -124,6 +126,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 set_appearance_mode=set_mode,
                 set_columns=lambda _columns: True,
                 set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
                 set_hotkeys=lambda _panel, _quick: True,
             ),
         )

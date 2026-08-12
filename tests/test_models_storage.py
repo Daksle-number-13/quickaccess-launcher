@@ -44,6 +44,7 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertEqual(DEFAULT_APPEARANCE_MODE, config.appearance_mode)
         self.assertTrue(config.run_on_startup)
         self.assertFalse(config.welcome_shown)
+        self.assertFalse(config.check_updates)
         self.assertEqual(3, config.columns)
         self.assertEqual(
             [str(home / "Downloads"), str(home / "Documents")],
@@ -86,6 +87,7 @@ class LauncherConfigTests(unittest.TestCase):
                 "appearance_mode": "LIGHT",
                 "run_on_startup": "false",
                 "welcome_shown": "yes",
+                "check_updates": "true",
                 "columns": 99,
                 "items": [],
             }
@@ -96,6 +98,7 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertEqual("light", config.appearance_mode)
         self.assertFalse(config.run_on_startup)
         self.assertTrue(config.welcome_shown)
+        self.assertTrue(config.check_updates)
         self.assertEqual(5, config.columns)
         self.assertEqual([], config.items)
         self.assertEqual(2, config.set_columns(-5))

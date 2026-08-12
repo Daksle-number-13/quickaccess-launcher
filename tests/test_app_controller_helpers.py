@@ -146,13 +146,33 @@ class _UpdateCheckHarness:
     def __init__(self) -> None:
         self.config = LauncherConfig.default()
         self.toast = _ToastRecorder()
+        self.check_calls = 0
 
     def _commit(self, mutator: object, _message: str) -> bool:
         mutator(self.config)  # type: ignore[operator]
         return True
 
+    def _check_for_update(self) -> None:
+        self.check_calls += 1
+
 
 class ControllerResponsivenessTests(unittest.TestCase):
+    def test_update_checks_require_explicit_opt_in(self) -> None:
+        harness = _UpdateCheckHarness()
+        self.assertFalse(harness.config.check_updates)
+
+        self.assertTrue(
+            QuickAccessApp.set_update_checks(harness, True)  # type: ignore[arg-type]
+        )
+        self.assertTrue(harness.config.check_updates)
+        self.assertEqual(1, harness.check_calls)
+
+        self.assertTrue(
+            QuickAccessApp.set_update_checks(harness, False)  # type: ignore[arg-type]
+        )
+        self.assertFalse(harness.config.check_updates)
+        self.assertEqual(1, harness.check_calls)
+
     def test_visible_popup_refreshes_are_coalesced_until_idle(self) -> None:
         harness = _PopupRefreshHarness()
 

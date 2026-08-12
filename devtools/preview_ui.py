@@ -80,6 +80,7 @@ def render(mode: str, appearance: str, output: Path, page: str) -> None:
                 set_appearance_mode=lambda _mode: True,
                 set_columns=lambda _columns: True,
                 set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
                 set_hotkeys=lambda _panel, _quick: True,
             ),
         )

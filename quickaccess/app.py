@@ -137,7 +137,7 @@ class QuickAccessApp:
     def start(self) -> None:
         """Start integrations, validation and the Tk-side command pump."""
 
-        if not self.smoke_test:
+        if not self.smoke_test and self.config.check_updates:
             self._synchronize_startup_registration()
 
         hotkey_ready = self._configure_hotkeys(
@@ -354,6 +354,7 @@ class QuickAccessApp:
                     set_appearance_mode=self.set_appearance_mode,
                     set_columns=self.set_columns,
                     set_startup=self.set_startup,
+                    set_update_checks=self.set_update_checks,
                     set_hotkeys=self.set_hotkeys,
                 ),
             )
@@ -520,6 +521,18 @@ class QuickAccessApp:
                 duration_ms=7000,
             )
         return False
+
+    def set_update_checks(self, enabled: bool) -> bool:
+        """Persist the explicit consent controlling GitHub release checks."""
+
+        if not self._commit(
+            lambda config: setattr(config, "check_updates", bool(enabled)),
+            "업데이트 확인 설정을 저장하지 못했습니다",
+        ):
+            return False
+        if enabled:
+            self._check_for_update()
+        return True
 
     def _synchronize_startup_registration(self) -> None:
         executable, arguments = startup_invocation()

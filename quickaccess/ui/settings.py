@@ -88,6 +88,7 @@ class SettingsActions:
     set_appearance_mode: Callable[[str], bool]
     set_columns: Callable[[int], bool]
     set_startup: Callable[[bool], bool]
+    set_update_checks: Callable[[bool], bool]
     set_hotkeys: Callable[[str, str], bool]
 
 
@@ -466,6 +467,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self._hotkey_warning = ctk.CTkLabel(
             fields,
             text="",
+            width=1,
+            wraplength=420,
             font=font(10),
             text_color=WARNING,
             anchor="w",
@@ -499,6 +502,25 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._startup_changed,
         )
         self._startup.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
+
+        updates = self._settings_card(
+            scroll,
+            row=4,
+            title="업데이트 확인",
+            description="켜면 시작할 때 GitHub에서 새 버전을 확인합니다.",
+        )
+        self._updates_card = updates
+        self._updates_variable = tk.BooleanVar(value=False)
+        self._updates = ctk.CTkSwitch(
+            updates,
+            text="",
+            width=46,
+            variable=self._updates_variable,
+            progress_color=ACCENT,
+            button_hover_color=ACCENT_HOVER,
+            command=self._updates_changed,
+        )
+        self._updates.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
 
     def _settings_card(
         self,
@@ -656,6 +678,9 @@ class SettingsWindow(ctk.CTkToplevel):
         ultra_compact = logical_width < 520
         needs_refresh = ultra_compact != self._ultra_compact
         self._ultra_compact = ultra_compact
+        self._hotkey_warning.configure(
+            wraplength=170 if ultra_compact else (300 if compact else 420)
+        )
         sidebar_width = 104 if ultra_compact else (160 if compact else SIDEBAR_WIDTH)
         self.grid_columnconfigure(0, minsize=sidebar_width)
         self._sidebar.configure(width=sidebar_width)
@@ -738,6 +763,15 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=(0, 12),
                 sticky="w",
             )
+            self._updates.grid_configure(
+                row=2,
+                column=0,
+                columnspan=2,
+                rowspan=1,
+                padx=18,
+                pady=(0, 12),
+                sticky="w",
+            )
             self._layout_hotkeys_for_narrow_width()
         else:
             self._items_header.grid_columnconfigure(1, weight=0)
@@ -779,6 +813,15 @@ class SettingsWindow(ctk.CTkToplevel):
                 sticky="e",
             )
             self._startup.grid_configure(
+                row=0,
+                column=1,
+                columnspan=1,
+                rowspan=2,
+                padx=22,
+                pady=16,
+                sticky="e",
+            )
+            self._updates.grid_configure(
                 row=0,
                 column=1,
                 columnspan=1,
@@ -914,6 +957,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 APPEARANCE_LABELS.get(config.appearance_mode, "시스템")
             )
             self._startup_variable.set(config.run_on_startup)
+            self._updates_variable.set(config.check_updates)
             self._replace_entry(self._panel_hotkey, config.hotkey)
             self._replace_entry(self._quick_hotkey, config.quick_add_hotkey)
             self._update_hotkey_warning()
@@ -1125,6 +1169,11 @@ class SettingsWindow(ctk.CTkToplevel):
     def _startup_changed(self) -> None:
         if not self._refreshing:
             self._actions.set_startup(bool(self._startup_variable.get()))
+            self.refresh()
+
+    def _updates_changed(self) -> None:
+        if not self._refreshing:
+            self._actions.set_update_checks(bool(self._updates_variable.get()))
             self.refresh()
 
     def _apply_hotkeys(self) -> None:

@@ -167,6 +167,7 @@ class LauncherConfig:
     run_on_startup: bool = True
     columns: int = DEFAULT_COLUMNS
     welcome_shown: bool = False
+    check_updates: bool = False
     last_update_notice: str = ""
     items: list[LauncherItem] = field(default_factory=list)
 
@@ -236,6 +237,7 @@ class LauncherConfig:
             run_on_startup = _coerce_bool(data.get("run_on_startup"), True)
             columns = _coerce_columns(data.get("columns"))
             welcome_shown = _coerce_bool(data.get("welcome_shown"), False)
+            check_updates = _coerce_bool(data.get("check_updates"), False)
             last_update_notice = _optional_text(data.get("last_update_notice"))
         elif isinstance(data, Sequence) and not isinstance(
             data, (str, bytes, bytearray)
@@ -248,6 +250,7 @@ class LauncherConfig:
             run_on_startup = True
             columns = DEFAULT_COLUMNS
             welcome_shown = False
+            check_updates = False
             last_update_notice = ""
         else:
             raise ValueError("Configuration root must be a JSON object or array")
@@ -273,6 +276,7 @@ class LauncherConfig:
             run_on_startup=run_on_startup,
             columns=columns,
             welcome_shown=welcome_shown,
+            check_updates=check_updates,
             last_update_notice=last_update_notice,
             items=parsed_items,
         )
@@ -299,6 +303,7 @@ class LauncherConfig:
         self.run_on_startup = _coerce_bool(self.run_on_startup, True)
         self.columns = _coerce_columns(self.columns)
         self.welcome_shown = _coerce_bool(self.welcome_shown, False)
+        self.check_updates = _coerce_bool(self.check_updates, False)
         self.last_update_notice = _optional_text(self.last_update_notice)
 
         valid_items: list[LauncherItem] = []
@@ -333,6 +338,7 @@ class LauncherConfig:
             "run_on_startup": self.run_on_startup,
             "columns": self.columns,
             "welcome_shown": self.welcome_shown,
+            "check_updates": self.check_updates,
             "last_update_notice": self.last_update_notice,
             "items": [item.to_dict() for item in self.items],
         }

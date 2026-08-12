@@ -21,8 +21,10 @@
 - Committer and reviewer: [Daksle](https://github.com/Daksle-number-13)
 - Approver: [Daksle](https://github.com/Daksle-number-13)
 - Signed release artifacts are built from this public repository by GitHub Actions.
-- Privacy: This program will not transfer any information to other networked systems
-  unless specifically requested by the user or the person installing or operating it.
+- Privacy: By default, this program does not transfer information to networked systems.
+  If the user explicitly enables automatic update checks, it requests public release
+  metadata from the [GitHub Releases API](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+  Saved launcher names and paths are never included in that request.
 
 ## 동작 화면
 
@@ -52,7 +54,8 @@
 - 시스템 트레이 메뉴: `패널 열기`, `설정`, `종료`
 - 사용자별 자동 실행, 단일 인스턴스, 한글 경로 및 UTF-8 JSON 지원
 - Windows 11 계열 카드 UI, 저장되는 밝기 모드, 혼합 DPI 모니터 대응
-- 새 GitHub 릴리스가 있으면 트레이 알림으로 안내(같은 버전은 한 번만 표시)
+- 설정에서 새 버전 자동 확인을 켜면 GitHub 릴리스를 확인해 트레이 알림으로 안내
+  (기본값은 꺼짐, 같은 버전은 한 번만 표시)
 - 설정 저장 위치: `%APPDATA%\QuickAccess\items.json`
   (저장할 때마다 직전 버전을 `items.bak.json`으로 하나 더 남겨 실수 복구 가능)
 - 로그 위치: `%LOCALAPPDATA%\QuickAccess\logs\quickaccess.log`
@@ -114,9 +117,9 @@ python main.py --smoke-test
 등을 검사합니다. `.github/workflows/ci.yml`이 `main` 커밋과 모든 PR마다
 Windows 러너에서 이 테스트 스위트를 자동 실행합니다.
 
-셸 아이콘 추출(`quickaccess/services/icons.py`)은 pywin32의 GDI 바인딩을
-가짜 객체로 대체해 캐싱·중복 방지·실패 처리 로직만 검증합니다. 실제 Windows
-GDI 호출 자체는 이 리포지토리의 자동 테스트로 검증되지 않으므로, 실제
+셸 아이콘 추출(`quickaccess/services/icons.py`)은 별도 `win32ui` 모듈 없이
+Windows Shell/GDI API를 직접 사용합니다. 자동 테스트는 캐싱·중복 방지·실패
+처리를 검증하며, 실제 Windows API 호출은 릴리스 스모크에서 확인합니다. 실제
 아이콘이 카드에 정확히 표시되는지는 배포 전 실제 PC에서 반드시 육안으로
 확인하세요.
 
