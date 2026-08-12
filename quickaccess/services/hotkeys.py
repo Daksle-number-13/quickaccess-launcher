@@ -185,6 +185,33 @@ def parse_hotkey(shortcut: str) -> ParsedHotkey:
     return ParsedHotkey(modifiers, virtual_key, "+".join(canonical_parts))
 
 
+# Combinations known to collide with software QuickAccess cannot detect via
+# RegisterHotKey, because they are consumed before Windows dispatches
+# WM_HOTKEY (IME toggles) or are merely a strong convention (IDE
+# autocomplete).  RegisterHotKey only fails for a hotkey another app has
+# *also* registered natively, so these silent collisions need a static hint
+# instead of a runtime probe.
+KNOWN_HOTKEY_CONFLICTS: Mapping[str, str] = {
+    "ctrl+space": "Windows 한/영 전환 및 일부 IDE(Ctrl+Space 자동완성)와 겹칠 수 있습니다.",
+    "ctrl+shift+space": "일부 IDE의 매개변수 정보 단축키와 겹칠 수 있습니다.",
+}
+
+
+def describe_hotkey_conflict_risk(shortcut: str) -> str | None:
+    """Return a static caution for a shortcut known to commonly collide.
+
+    This does not detect an actual runtime conflict (RegisterHotKey already
+    surfaces those as a registration error).  It flags combinations that
+    silently coexist with QuickAccess but may not fire as expected.
+    """
+
+    try:
+        canonical = parse_hotkey(shortcut).canonical
+    except HotkeyParseError:
+        return None
+    return KNOWN_HOTKEY_CONFLICTS.get(canonical)
+
+
 def prepare_bindings(bindings: Mapping[str, BindingInput]) -> tuple[PreparedHotkeyBinding, ...]:
     """Validate and canonicalize a complete binding set before native mutation."""
 
@@ -637,6 +664,7 @@ __all__ = [
     "HotkeyParseError",
     "HotkeyRegistrationError",
     "HotkeyUnavailableError",
+    "KNOWN_HOTKEY_CONFLICTS",
     "MOD_ALT",
     "MOD_CONTROL",
     "MOD_NOREPEAT",
@@ -645,6 +673,7 @@ __all__ = [
     "NativeHotkeyService",
     "ParsedHotkey",
     "PreparedHotkeyBinding",
+    "describe_hotkey_conflict_risk",
     "parse_hotkey",
     "prepare_bindings",
 ]

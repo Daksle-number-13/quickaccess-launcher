@@ -181,6 +181,33 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertFalse(loaded.changed_on_disk)
             self.assertEqual(config.to_dict(), loaded.config.to_dict())
 
+    def test_save_keeps_a_single_rolling_backup_of_the_previous_version(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            store = ConfigStore(path)
+            backup_path = path.with_name("items.bak.json")
+
+            first = LauncherConfig(items=[])
+            first.add_item(r"C:\First", name="첫 번째")
+            store.save(first)
+            self.assertFalse(backup_path.exists())
+
+            second = LauncherConfig(items=[])
+            second.add_item(r"C:\Second", name="두 번째")
+            store.save(second)
+
+            self.assertTrue(backup_path.exists())
+            backed_up = json.loads(backup_path.read_text(encoding="utf-8"))
+            self.assertEqual("첫 번째", backed_up["items"][0]["name"])
+            current = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("두 번째", current["items"][0]["name"])
+
+            third = LauncherConfig(items=[])
+            third.add_item(r"C:\Third", name="세 번째")
+            store.save(third)
+            backed_up = json.loads(backup_path.read_text(encoding="utf-8"))
+            self.assertEqual("두 번째", backed_up["items"][0]["name"])
+
     def test_legacy_schema_is_migrated_and_rewritten(self) -> None:
         with writable_test_directory() as temporary_directory:
             path = Path(temporary_directory) / "items.json"

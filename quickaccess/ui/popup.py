@@ -97,6 +97,33 @@ def popup_dimensions(
     return width, height, columns, viewport_height
 
 
+def grid_navigation_target(
+    row: int,
+    column: int,
+    direction: str,
+    columns: int,
+    item_count: int,
+) -> int | None:
+    """Return the row-major card index reached from ``(row, column)``.
+
+    Returns ``None`` at a grid edge so callers can leave focus where it is
+    instead of wrapping to an unrelated card.
+    """
+
+    index = row * columns + column
+    if direction == "left":
+        return index - 1 if column > 0 else None
+    if direction == "right":
+        target = index + 1
+        return target if column < columns - 1 and target < item_count else None
+    if direction == "up":
+        return index - columns if row > 0 else None
+    if direction == "down":
+        target = index + columns
+        return target if target < item_count else None
+    return None
+
+
 def _ellipsize(value: str, limit: int = 22) -> str:
     if len(value) <= limit:
         return value
@@ -123,6 +150,7 @@ class _LauncherCard(ctk.CTkFrame):
         item: LauncherItem,
         status: PathStatus | None,
         command: Callable[[], None],
+        on_context_menu: Callable[[tk.Event[tk.Misc]], None] | None = None,
     ) -> None:
         self._broken = status is not None and status is not PathStatus.VALID
         self._timed_out = status is PathStatus.TIMEOUT
@@ -224,6 +252,8 @@ class _LauncherCard(ctk.CTkFrame):
             widget.bind("<Button-1>", self._invoke, add="+")
             widget.bind("<Enter>", self._on_enter, add="+")
             widget.bind("<Leave>", self._on_leave, add="+")
+            if on_context_menu is not None:
+                widget.bind("<Button-3>", on_context_menu, add="+")
         self.bind("<Return>", self._invoke, add="+")
         self.bind("<space>", self._invoke, add="+")
         self.bind("<FocusIn>", self._on_focus_in, add="+")
@@ -276,6 +306,7 @@ class PopupPanel(ctk.CTkToplevel):
         self.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
+        self._cards: list[_LauncherCard] = []
         self._window_background: str | tuple[str, str] = SURFACE
         try:
             self.configure(fg_color=_TRANSPARENT_KEY)
@@ -461,6 +492,7 @@ class PopupPanel(ctk.CTkToplevel):
         for column in range(columns):
             items_frame.grid_columnconfigure(column, weight=1, uniform="launcher-card")
 
+        self._cards = []
         if not config.items:
             self._add_empty_state(items_frame)
         else:
@@ -511,6 +543,8 @@ class PopupPanel(ctk.CTkToplevel):
             return
         try:
             self.focus_force()
+            if self._cards:
+                self._cards[0].focus_set()
         finally:
             self._arming_focus = False
 
@@ -602,7 +636,15 @@ class PopupPanel(ctk.CTkToplevel):
             if broken
             else (lambda item_id=item.id: self._activate(item_id))
         )
-        card = _LauncherCard(parent, item=item, status=status, command=callback)
+        card = _LauncherCard(
+            parent,
+            item=item,
+            status=status,
+            command=callback,
+            on_context_menu=lambda event, name=item.name, path=item.path: (
+                self._show_context_menu(event, name, path)
+            ),
+        )
         horizontal_padding = (
             GAP // 2 if column > 0 else 0,
             GAP // 2 if column < self._layout_columns - 1 else 0,
@@ -618,6 +660,43 @@ class PopupPanel(ctk.CTkToplevel):
             pady=vertical_padding,
             sticky="nsew",
         )
+        card.bind("<Up>", lambda _e, r=row, c=column: self._navigate(r, c, "up"), add="+")
+        card.bind("<Down>", lambda _e, r=row, c=column: self._navigate(r, c, "down"), add="+")
+        card.bind("<Left>", lambda _e, r=row, c=column: self._navigate(r, c, "left"), add="+")
+        card.bind(
+            "<Right>", lambda _e, r=row, c=column: self._navigate(r, c, "right"), add="+"
+        )
+        self._cards.append(card)
+
+    def _navigate(self, row: int, column: int, direction: str) -> str:
+        target = grid_navigation_target(row, column, direction, self._layout_columns, len(self._cards))
+        if target is not None and 0 <= target < len(self._cards):
+            self._cards[target].focus_set()
+        return "break"
+
+    def _show_context_menu(
+        self,
+        event: tk.Event[tk.Misc],
+        name: str,
+        path: str,
+    ) -> str:
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(
+            label=f"'{_ellipsize(name, 18)}' 경로 복사",
+            command=lambda: self._copy_path(path),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
+    def _copy_path(self, path: str) -> None:
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(path)
+        except tk.TclError:
+            pass
 
     def _activate(self, item_id: str) -> None:
         self.hide()

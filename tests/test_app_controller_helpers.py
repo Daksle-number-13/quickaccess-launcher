@@ -9,6 +9,7 @@ from quickaccess.app import QuickAccessApp
 from quickaccess.commands import CommandBus, LaunchResultCommand
 from quickaccess.models import LauncherConfig
 from quickaccess.services.launcher import FileLauncher
+from quickaccess.services.update_check import UpdateCheckResult
 
 
 class _PublishHarness:
@@ -100,6 +101,48 @@ class _AppearanceHarness:
         return True
 
 
+class _ValidatorRecorder:
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+        self.validated: list[tuple[str, str]] = []
+
+    def cancel(self, item_id: str) -> None:
+        self.cancelled.append(item_id)
+
+    def validate(self, item_id: str, path: str) -> None:
+        self.validated.append((item_id, path))
+
+
+class _DeleteUndoHarness:
+    def __init__(self) -> None:
+        self.config = LauncherConfig(items=[])
+        self.config.add_item(r"C:\Keep", name="유지")
+        self.target = self.config.add_item(r"C:\Delete", name="삭제 대상")
+        self.statuses: dict[str, object] = {self.target.id: "stale"}
+        self.toast = _ToastRecorder()
+        self.settings = None
+        self.validator = _ValidatorRecorder()
+
+    def _commit(self, mutator: object, _message: str) -> bool:
+        mutator(self.config)  # type: ignore[operator]
+        return True
+
+    def _restore_deleted_item(
+        self, name: str, path: str, item_type: str, order: int
+    ) -> None:
+        QuickAccessApp._restore_deleted_item(self, name, path, item_type, order)  # type: ignore[arg-type]
+
+
+class _UpdateCheckHarness:
+    def __init__(self) -> None:
+        self.config = LauncherConfig.default()
+        self.toast = _ToastRecorder()
+
+    def _commit(self, mutator: object, _message: str) -> bool:
+        mutator(self.config)  # type: ignore[operator]
+        return True
+
+
 class ControllerResponsivenessTests(unittest.TestCase):
     def test_visible_popup_refreshes_are_coalesced_until_idle(self) -> None:
         harness = _PopupRefreshHarness()
@@ -177,6 +220,63 @@ class ControllerResponsivenessTests(unittest.TestCase):
             )
             self.assertEqual("system", failed.config.appearance_mode)
             apply_mode.assert_not_called()
+
+    def test_delete_offers_undo_that_restores_original_order(self) -> None:
+        harness = _DeleteUndoHarness()
+        target_id = harness.target.id
+
+        result = QuickAccessApp.delete_item(harness, target_id)  # type: ignore[arg-type]
+
+        self.assertTrue(result)
+        self.assertEqual(1, len(harness.config.items))
+        self.assertNotIn(target_id, harness.statuses)
+        self.assertIn(target_id, harness.validator.cancelled)
+        message, options = harness.toast.messages[-1]
+        self.assertIn("삭제했습니다", message)
+        self.assertEqual("실행취소", options["action_text"])
+
+        options["action_command"]()  # type: ignore[operator]
+
+        self.assertEqual(2, len(harness.config.items))
+        restored = harness.config.items[1]
+        self.assertEqual("삭제 대상", restored.name)
+        self.assertEqual(r"C:\Delete", restored.path)
+        self.assertEqual(1, restored.order)
+        self.assertIn((restored.id, restored.path), harness.validator.validated)
+        self.assertIn("복구했습니다", harness.toast.messages[-1][0])
+
+    def test_update_available_shows_a_toast_with_a_download_action(self) -> None:
+        harness = _UpdateCheckHarness()
+        result = UpdateCheckResult(
+            available=True,
+            latest_version="v9.9.9",
+            release_url="https://example.invalid/releases/v9.9.9",
+        )
+
+        QuickAccessApp._apply_update_check(harness, result)  # type: ignore[arg-type]
+
+        self.assertEqual("v9.9.9", harness.config.last_update_notice)
+        message, options = harness.toast.messages[-1]
+        self.assertIn("v9.9.9", message)
+        self.assertEqual("다운로드 페이지", options["action_text"])
+
+    def test_update_notice_for_the_same_version_is_shown_only_once(self) -> None:
+        harness = _UpdateCheckHarness()
+        harness.config.last_update_notice = "v9.9.9"
+        result = UpdateCheckResult(available=True, latest_version="v9.9.9")
+
+        QuickAccessApp._apply_update_check(harness, result)  # type: ignore[arg-type]
+
+        self.assertEqual([], harness.toast.messages)
+
+    def test_unavailable_update_result_shows_no_toast(self) -> None:
+        harness = _UpdateCheckHarness()
+
+        QuickAccessApp._apply_update_check(  # type: ignore[arg-type]
+            harness, UpdateCheckResult(available=False)
+        )
+
+        self.assertEqual([], harness.toast.messages)
 
 
 if __name__ == "__main__":

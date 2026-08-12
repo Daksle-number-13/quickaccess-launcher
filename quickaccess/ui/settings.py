@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from ..models import LauncherConfig, LauncherItem
+from ..services.hotkeys import describe_hotkey_conflict_risk
 from ..services.monitor import NativeMonitorService, Rect, Size, center_window_in_work_area
 from .dialogs import ask_display_name, position_geometry
 from .theme import (
@@ -27,6 +28,7 @@ from .theme import (
     SURFACE_ALT,
     SURFACE_HOVER,
     TEXT,
+    WARNING,
     brand_image,
     font,
     icon_font,
@@ -447,6 +449,8 @@ class SettingsWindow(ctk.CTkToplevel):
         fields.grid_columnconfigure(1, weight=1)
         self._panel_hotkey = self._hotkey_field(fields, 0, "패널 열기")
         self._quick_hotkey = self._hotkey_field(fields, 1, "탐색기에서 빠른 등록")
+        self._panel_hotkey.bind("<KeyRelease>", self._update_hotkey_warning, add="+")
+        self._quick_hotkey.bind("<KeyRelease>", self._update_hotkey_warning, add="+")
         self._apply_hotkeys_button = ctk.CTkButton(
             fields,
             text="변경사항 적용",
@@ -459,6 +463,23 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._apply_hotkeys,
         )
         self._apply_hotkeys_button.grid(row=2, column=1, pady=(12, 0), sticky="e")
+        self._hotkey_warning = ctk.CTkLabel(
+            fields,
+            text="",
+            font=font(10),
+            text_color=WARNING,
+            anchor="w",
+            justify="left",
+        )
+        self._hotkey_warning.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            padx=0,
+            pady=(8, 0),
+            sticky="ew",
+        )
+        self._hotkey_warning.grid_remove()
 
         startup = self._settings_card(
             scroll,
@@ -895,8 +916,21 @@ class SettingsWindow(ctk.CTkToplevel):
             self._startup_variable.set(config.run_on_startup)
             self._replace_entry(self._panel_hotkey, config.hotkey)
             self._replace_entry(self._quick_hotkey, config.quick_add_hotkey)
+            self._update_hotkey_warning()
         finally:
             self._refreshing = False
+
+    def _update_hotkey_warning(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        warnings: list[str] = []
+        for entry in (self._panel_hotkey, self._quick_hotkey):
+            risk = describe_hotkey_conflict_risk(entry.get().strip())
+            if risk and risk not in warnings:
+                warnings.append(risk)
+        if warnings:
+            self._hotkey_warning.configure(text="⚠ " + " ".join(warnings))
+            self._hotkey_warning.grid()
+        else:
+            self._hotkey_warning.grid_remove()
 
     def _add_empty_state(self) -> None:
         empty = ctk.CTkFrame(self._list, fg_color="transparent")

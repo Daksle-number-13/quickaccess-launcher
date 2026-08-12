@@ -175,6 +175,11 @@ class ConfigStore:
             return False
         return isinstance(raw_items, list) and len(raw_items) != len(config.items)
 
+    def _rolling_backup_path(self) -> Path:
+        suffix = self.path.suffix or ".json"
+        stem = self.path.stem if self.path.suffix else self.path.name
+        return self.path.with_name(f"{stem}.bak{suffix}")
+
     def _save_unlocked(self, config: LauncherConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = config.to_dict()
@@ -196,6 +201,14 @@ class ConfigStore:
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+            if self.path.exists():
+                # Best-effort single rolling backup of the previous version so
+                # an accidental bad edit can be recovered from the file system
+                # without blocking or failing the actual save.
+                try:
+                    shutil.copy2(self.path, self._rolling_backup_path())
+                except OSError:
+                    pass
             os.replace(temporary_path, self.path)
         finally:
             try:

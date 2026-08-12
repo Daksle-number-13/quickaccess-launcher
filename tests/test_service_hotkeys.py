@@ -15,6 +15,7 @@ from quickaccess.services.hotkeys import (
     HotkeyRegistrationError,
     NativeHotkeyService,
     _RegistrationManager,
+    describe_hotkey_conflict_risk,
     parse_hotkey,
     prepare_bindings,
 )
@@ -51,6 +52,14 @@ class HotkeyParserTests(unittest.TestCase):
                     "quick_add": HotkeyBinding("CTRL+SPACE", lambda: None),
                 }
             )
+
+    def test_conflict_risk_flags_known_combinations_regardless_of_formatting(self) -> None:
+        self.assertIsNotNone(describe_hotkey_conflict_risk("Control + Space"))
+        self.assertIsNotNone(describe_hotkey_conflict_risk("ctrl+shift+space"))
+
+    def test_conflict_risk_is_none_for_unlisted_or_invalid_shortcuts(self) -> None:
+        self.assertIsNone(describe_hotkey_conflict_risk("ctrl+alt+q"))
+        self.assertIsNone(describe_hotkey_conflict_risk("not a hotkey"))
 
 
 class _FakeRegistrationApi:

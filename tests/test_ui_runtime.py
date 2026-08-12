@@ -215,6 +215,54 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             self.root.mainloop()
             popup.destroy()
 
+    def test_popup_arrow_keys_move_focus_between_cards(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.show(config, {}, Point(20, 20), Rect(0, 0, 1920, 1040))
+            self.root.update()
+            self.assertEqual(len(popup._cards), len(config.items))
+
+            popup._cards[0].focus_set()
+            self.root.update()
+            popup._navigate(0, 0, "right")
+            self.root.update()
+            self.assertIs(popup.focus_get(), popup._cards[1]._canvas)
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_popup_context_menu_copies_path_to_clipboard(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.show(config, {}, Point(20, 20), Rect(0, 0, 1920, 1040))
+            self.root.update()
+            popup._copy_path(config.items[0].path)
+            self.root.update()
+            self.assertEqual(popup.clipboard_get(), config.items[0].path)
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
     @staticmethod
     def _descendants_of_type(parent: tk.Misc, widget_type: type) -> list:
         result = []

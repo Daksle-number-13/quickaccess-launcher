@@ -228,7 +228,15 @@ class ToastManager:
         self._window: ctk.CTkToplevel | None = None
         self._dismiss_after: str | None = None
 
-    def show(self, message: str, *, kind: str = "info", duration_ms: int = 3200) -> None:
+    def show(
+        self,
+        message: str,
+        *,
+        kind: str = "info",
+        duration_ms: int = 3200,
+        action_text: str | None = None,
+        action_command: Callable[[], None] | None = None,
+    ) -> None:
         self.close()
         window = ctk.CTkToplevel(self._root)
         self._window = window
@@ -241,7 +249,8 @@ class ToastManager:
         estimated_lines = sum(
             max(1, math.ceil(len(line) / 42)) for line in (message.splitlines() or [""])
         )
-        base_width = 420
+        has_action = bool(action_text) and action_command is not None
+        base_width = 420 if not has_action else 460
         base_height = min(180, 64 + max(0, estimated_lines - 1) * 18)
         card = ctk.CTkFrame(
             window,
@@ -279,9 +288,21 @@ class ToastManager:
             text_color=TEXT,
             justify="left",
             anchor="w",
-            wraplength=base_width - 90,
+            wraplength=base_width - (150 if has_action else 90),
         )
-        message_label.grid(row=0, column=2, padx=(0, 18), pady=13, sticky="ew")
+        message_label.grid(row=0, column=2, padx=(0, 6 if has_action else 18), pady=13, sticky="ew")
+        if has_action:
+            ctk.CTkButton(
+                card,
+                text=action_text,
+                width=76,
+                height=30,
+                corner_radius=8,
+                fg_color=color,
+                hover_color=color,
+                font=font(10, "bold"),
+                command=lambda: self._run_action(action_command),
+            ).grid(row=0, column=3, padx=(0, 14), pady=13)
 
         try:
             monitor = NativeMonitorService()
@@ -345,6 +366,10 @@ class ToastManager:
                     attempts_remaining=attempts_remaining - 1,
                 ),
             )
+
+    def _run_action(self, action_command: Callable[[], None]) -> None:
+        self.close()
+        action_command()
 
     def close(self) -> None:
         window, self._window = self._window, None

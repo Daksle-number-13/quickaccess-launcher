@@ -28,6 +28,24 @@ class _Item:
         self.IsFolder = is_folder
 
 
+class _Link:
+    def __init__(self, path: str) -> None:
+        self.Path = path
+
+
+class _ShortcutItem:
+    def __init__(self, lnk_path: str, target_path: str | None) -> None:
+        self.Path = lnk_path
+        self.IsFolder = False
+        self._target_path = target_path
+
+    @property
+    def GetLink(self) -> _Link:
+        if self._target_path is None:
+            raise RuntimeError("shortcut could not be resolved")
+        return _Link(self._target_path)
+
+
 class _ItemWithoutFolderType:
     def __init__(self, path: str) -> None:
         self.Path = path
@@ -183,6 +201,46 @@ class ExplorerQuickAddTests(unittest.TestCase):
         result = service.get_target()
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, ExplorerErrorCode.NO_FILESYSTEM_PATH)
+
+    def test_lnk_selection_resolves_to_shortcut_target(self) -> None:
+        window = _Window(22, [], r"C:\Ignored")
+        shortcut = _ShortcutItem(r"C:\Desktop\바로가기.lnk", r"D:\실제\대상 폴더")
+        selected = type(
+            "Selected",
+            (),
+            {"Count": 1, "Item": lambda _self, _index: shortcut},
+        )()
+        window.Document.SelectedItems = lambda: selected
+        service, _runtime = self.make_service(_Shell([window]))
+
+        with patch(
+            "quickaccess.services.explorer.detect_item_type",
+            return_value="folder",
+        ) as detect:
+            result = service.get_target()
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.path, r"D:\실제\대상 폴더")
+        self.assertEqual(result.item_type, "folder")
+        self.assertEqual(result.suggested_name, "대상 폴더")
+        detect.assert_called_once_with(r"D:\실제\대상 폴더")
+
+    def test_lnk_selection_falls_back_to_shortcut_file_when_unresolvable(self) -> None:
+        window = _Window(22, [], r"C:\Ignored")
+        shortcut = _ShortcutItem(r"C:\Desktop\깨진.lnk", None)
+        selected = type(
+            "Selected",
+            (),
+            {"Count": 1, "Item": lambda _self, _index: shortcut},
+        )()
+        window.Document.SelectedItems = lambda: selected
+        service, _runtime = self.make_service(_Shell([window]))
+
+        result = service.get_target()
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.path, r"C:\Desktop\깨진.lnk")
+        self.assertEqual(result.item_type, "file")
 
     def test_com_exception_becomes_safe_result_and_uninitializes(self) -> None:
         runtime = _Runtime()

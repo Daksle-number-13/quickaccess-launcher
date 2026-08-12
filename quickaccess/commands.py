@@ -26,6 +26,7 @@ class CommandType(str, Enum):
     VALIDATION_RESULT = "validation_result"
     LAUNCH_RESULT = "launch_result"
     SHOW_TOAST = "show_toast"
+    UPDATE_AVAILABLE = "update_available"
     QUIT = "quit"
 
 
@@ -133,6 +134,16 @@ class ShowToastCommand:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class UpdateAvailableCommand:
+    """Deliver a background release-check result back to the Tk thread."""
+
+    result: object
+    source: CommandSource = CommandSource.WORKER
+    created_at: float = field(default_factory=time.monotonic, compare=False)
+    type: CommandType = field(default=CommandType.UPDATE_AVAILABLE, init=False)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class QuitCommand:
     """Ask the UI thread to perform the coordinated shutdown sequence."""
 
@@ -150,6 +161,7 @@ AppCommand: TypeAlias = (
     | QuickAddResultCommand
     | LaunchResultCommand
     | ShowToastCommand
+    | UpdateAvailableCommand
     | QuitCommand
 )
 

@@ -12,6 +12,7 @@ from quickaccess.ui.popup import (
     HEADER_HEIGHT,
     PADDING,
     geometry_string,
+    grid_navigation_target,
     popup_dimensions,
 )
 from quickaccess.ui.settings import settings_dimensions
@@ -120,6 +121,21 @@ class PopupDimensionsTests(unittest.TestCase):
         self.assertEqual((width, height), (340, 220))
         self.assertLessEqual(round(width * 2.0) + 120, 800)
         self.assertLessEqual(round(height * 2.0) + 120, 560)
+
+    def test_grid_navigation_moves_within_bounds_in_a_three_column_grid(self) -> None:
+        # 7 items in 3 columns: rows [0,1,2], [3,4,5], [6]
+        self.assertEqual(grid_navigation_target(0, 0, "right", 3, 7), 1)
+        self.assertEqual(grid_navigation_target(0, 2, "right", 3, 7), None)
+        self.assertEqual(grid_navigation_target(0, 1, "left", 3, 7), 0)
+        self.assertEqual(grid_navigation_target(0, 0, "left", 3, 7), None)
+        self.assertEqual(grid_navigation_target(1, 0, "up", 3, 7), 0)
+        self.assertEqual(grid_navigation_target(0, 0, "up", 3, 7), None)
+        self.assertEqual(grid_navigation_target(0, 0, "down", 3, 7), 3)
+        self.assertEqual(grid_navigation_target(1, 0, "down", 3, 7), 6)
+        # Row 2 only has one card (index 6); moving down or right from it has
+        # nothing to land on.
+        self.assertIsNone(grid_navigation_target(2, 0, "down", 3, 7))
+        self.assertIsNone(grid_navigation_target(2, 0, "right", 3, 7))
 
     def test_shared_theme_helpers_return_ctk_compatible_values(self) -> None:
         for color in (BG, SURFACE, ACCENT):

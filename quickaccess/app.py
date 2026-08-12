@@ -17,6 +17,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from . import __version__
 from .commands import (
     AppCommand,
     CommandBus,
@@ -30,6 +31,7 @@ from .commands import (
     QuitCommand,
     ShowToastCommand,
     ToastLevel,
+    UpdateAvailableCommand,
     ValidationResultCommand,
 )
 from .logging_setup import close_logging, configure_logging, install_exception_hooks
@@ -47,6 +49,7 @@ from .services.monitor import NativeMonitorService, Point, Rect
 from .services.singleton import SingleInstanceGuard
 from .services.startup import StartupManager
 from .services.tray import TrayService
+from .services.update_check import DEFAULT_REPO, UpdateCheckResult, check_for_update
 from .services.validation import PathStatus, PathValidationService, ValidationResult
 from .storage import ConfigStore, LoadResult
 from .ui.dialogs import ToastManager, ask_display_name
@@ -151,6 +154,10 @@ class QuickAccessApp:
 
         self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
         self._validate_all_paths()
+        if not self.smoke_test:
+            # Delayed well past startup so a slow or firewalled network call
+            # never competes with hotkey/tray registration for attention.
+            self.root.after(5000, self._check_for_update)
         # Build the hidden launcher cards while the resident app is settling.
         # The first hotkey press can then reuse the ready widget tree instead
         # of constructing dozens of Tk widgets on the critical display path.
@@ -213,6 +220,8 @@ class QuickAccessApp:
             self._finish_launch(command.item_name, command.result)
         elif isinstance(command, ShowToastCommand):
             self.toast.show(command.message, kind=command.level.value)
+        elif isinstance(command, UpdateAvailableCommand):
+            self._apply_update_check(command.result)
         elif isinstance(command, QuitCommand):
             self.shutdown()
 
@@ -375,6 +384,12 @@ class QuickAccessApp:
         return True
 
     def delete_item(self, item_id: str) -> bool:
+        try:
+            item = self.config.get_item(item_id)
+        except KeyError:
+            return False
+        name, path, item_type, order = item.name, item.path, item.type, item.order
+
         if not self._commit(
             lambda config: config.delete_item(item_id),
             "항목을 삭제하지 못했습니다",
@@ -382,7 +397,30 @@ class QuickAccessApp:
             return False
         self.validator.cancel(item_id)
         self.statuses.pop(item_id, None)
+        self.toast.show(
+            f"'{name}' 항목을 삭제했습니다.",
+            kind="warning",
+            duration_ms=6000,
+            action_text="실행취소",
+            action_command=lambda: self._restore_deleted_item(name, path, item_type, order),
+        )
         return True
+
+    def _restore_deleted_item(self, name: str, path: str, item_type: str, order: int) -> None:
+        restored_id: list[str] = []
+
+        def mutate(config: LauncherConfig) -> None:
+            restored = config.add_item(path, name=name, item_type=item_type, position=order)
+            restored_id.append(restored.id)
+
+        if not self._commit(mutate, "항목을 복구하지 못했습니다"):
+            return
+        restored_item = self.config.get_item(restored_id[0])
+        self.statuses.pop(restored_item.id, None)
+        self.validator.validate(restored_item.id, restored_item.path)
+        if self.settings is not None and self.settings.winfo_viewable():
+            self.settings.refresh()
+        self.toast.show(f"'{name}' 항목을 복구했습니다.", kind="success")
 
     def rename_item(self, item_id: str, new_name: str) -> bool:
         return self._commit(
@@ -647,6 +685,43 @@ class QuickAccessApp:
                     self.settings.refresh()
         finally:
             self._quick_add_inflight = False
+
+    def _check_for_update(self) -> None:
+        def worker() -> None:
+            result = check_for_update(__version__)
+            self._safe_publish(UpdateAvailableCommand(result=result))
+
+        threading.Thread(
+            target=worker,
+            name="QuickAccessUpdateCheck",
+            daemon=True,
+        ).start()
+
+    def _apply_update_check(self, result: object) -> None:
+        if not isinstance(result, UpdateCheckResult) or not result.available:
+            return
+        if not result.latest_version or result.latest_version == self.config.last_update_notice:
+            return
+        latest_version = result.latest_version
+        release_url = result.release_url or f"https://github.com/{DEFAULT_REPO}/releases/latest"
+        self._commit(
+            lambda config: setattr(config, "last_update_notice", latest_version),
+            "업데이트 확인 상태를 저장하지 못했습니다",
+        )
+        self.toast.show(
+            f"새 버전 {latest_version}이(가) 있습니다.",
+            kind="info",
+            duration_ms=8000,
+            action_text="다운로드 페이지",
+            action_command=lambda: self._open_release_page(release_url),
+        )
+
+    def _open_release_page(self, url: str) -> None:
+        try:
+            os.startfile(url)
+        except Exception:
+            LOGGER.exception("Unable to open the release page")
+            self.toast.show(f"페이지를 여는 데 실패했습니다: {url}", kind="warning")
 
     def _dialog_parent(self) -> tk.Misc:
         if self.settings is not None:
