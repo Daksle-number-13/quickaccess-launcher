@@ -1,0 +1,77 @@
+name: Build and sign release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 1.0.0
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build-and-sign:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.15"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        shell: pwsh
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Build unsigned executable
+        shell: pwsh
+        run: .\build.ps1 -Clean -PythonExecutable python
+
+      - name: Upload unsigned executable
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: QuickAccess-unsigned
+          path: dist/QuickAccess.exe
+          archive: false
+
+      - name: Submit SignPath signing request
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          skip-decompress: true
+          wait-for-completion: true
+          output-artifact-directory: dist/signed
+          parameters: |
+            version: ${{ toJSON(inputs.version) }}
+
+      - name: Verify signed executable
+        shell: pwsh
+        run: |
+          $artifact = Get-ChildItem -Path dist/signed -Filter QuickAccess.exe -Recurse | Select-Object -First 1
+          if (-not $artifact) { throw "Signed QuickAccess.exe was not returned." }
+          $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
+          if ($signature.Status -ne "Valid") { throw "Authenticode verification failed: $($signature.Status)" }
+          Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256
+
+      - name: Upload signed executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: QuickAccess-${{ inputs.version }}-signed
+          path: dist/signed/**/QuickAccess.exe
+          if-no-files-found: error

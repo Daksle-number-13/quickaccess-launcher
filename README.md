@@ -3,6 +3,17 @@
 전역 핫키로 마우스 커서 위치에 버튼 패널을 띄우고, 자주 쓰는 Windows
 폴더와 파일을 한 번의 클릭으로 여는 상주형 런처입니다.
 
+## 다운로드
+
+[GitHub Releases](https://github.com/Daksle-number-13/quickaccess-launcher/releases)에서
+`QuickAccess.exe`를 다운로드하면 별도의 Python 설치 없이 바로 실행할 수
+있습니다. Windows 10/11 x64를 지원합니다.
+
+릴리스 바이너리의 Authenticode 서명은
+[SignPath Foundation](https://signpath.org/)의 무료 오픈소스 코드 서명 프로그램을
+사용하도록 자동화되어 있습니다. SignPath 승인 전에 게시된 바이너리는
+미서명 상태일 수 있으므로 각 Release의 서명 안내를 확인하세요.
+
 ## 동작 화면
 
 `Ctrl+Space`를 누르면 마우스 커서가 있는 모니터에 빠른 실행 패널이 즉시
@@ -152,3 +163,7 @@ quickaccess/
 tests/                     # 자동 단위 및 서비스 테스트
 quickaccess.spec           # 단일 EXE PyInstaller 구성
 ```
+
+## 라이선스
+
+[MIT License](LICENSE)
