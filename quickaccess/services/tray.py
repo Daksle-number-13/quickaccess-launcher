@@ -13,6 +13,7 @@ from typing import Any
 
 from PIL import Image
 
+from quickaccess.branding import create_brand_icon
 from quickaccess.commands import (
     CommandBus,
     CommandBusClosedError,
@@ -39,39 +40,9 @@ class TrayState(str, Enum):
 
 
 def create_tray_icon(size: int = 64) -> Image.Image:
-    """Generate the tray bitmap in memory, avoiding a runtime asset file."""
+    """Generate the shared Park Jin-Su signature tray bitmap."""
 
-    if size < 16:
-        raise ValueError("tray icon size must be at least 16 pixels")
-
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    inset = max(2, size // 16)
-    radius = max(3, size // 5)
-    _fill_rounded_rectangle(
-        image,
-        (inset, inset, size - inset - 1, size - inset - 1),
-        radius,
-        (37, 99, 235, 255),
-    )
-
-    # A high-contrast 2x2 launcher grid remains legible after Windows scales
-    # the source image down to a 16px notification-area icon.
-    cell = max(2, size // 5)
-    gap = max(2, size // 10)
-    grid_size = cell * 2 + gap
-    origin = (size - grid_size) // 2
-    cell_radius = max(1, size // 32)
-    for row in range(2):
-        for column in range(2):
-            left = origin + column * (cell + gap)
-            top = origin + row * (cell + gap)
-            _fill_rounded_rectangle(
-                image,
-                (left, top, left + cell, top + cell),
-                cell_radius,
-                (255, 255, 255, 255),
-            )
-    return image
+    return create_brand_icon(size).copy()
 
 
 def _fill_rounded_rectangle(

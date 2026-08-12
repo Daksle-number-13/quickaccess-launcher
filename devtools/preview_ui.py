@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 import sys
 
@@ -36,12 +38,15 @@ def sample_config() -> LauncherConfig:
 
 def capture(widget: ctk.CTkBaseClass, output: Path, root: ctk.CTk) -> None:
     widget.update_idletasks()
-    x = widget.winfo_rootx()
-    y = widget.winfo_rooty()
-    width = widget.winfo_width()
-    height = widget.winfo_height()
+    hwnd = ctypes.windll.user32.GetAncestor(widget.winfo_id(), 2)  # GA_ROOT
+    bounds = wintypes.RECT()
+    if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(bounds)):
+        raise ctypes.WinError()
     output.parent.mkdir(parents=True, exist_ok=True)
-    ImageGrab.grab(bbox=(x, y, x + width, y + height), all_screens=True).save(output)
+    ImageGrab.grab(
+        bbox=(bounds.left, bounds.top, bounds.right, bounds.bottom),
+        all_screens=True,
+    ).save(output)
     root.quit()
 
 

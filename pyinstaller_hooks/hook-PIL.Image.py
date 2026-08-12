@@ -5,4 +5,4 @@ images.  PyInstaller's default Pillow hook collects every codec (AVIF, WebP,
 JPEG, and others), adding several megabytes and one-file extraction latency.
 """
 
-hiddenimports = ["PIL.IcoImagePlugin"]
+hiddenimports = ["PIL.IcoImagePlugin", "PIL.PngImagePlugin"]

@@ -27,6 +27,7 @@ from .theme import (
     SURFACE_ALT,
     SURFACE_HOVER,
     TEXT,
+    brand_image,
     font,
     icon_font,
 )
@@ -139,13 +140,11 @@ class SettingsWindow(ctk.CTkToplevel):
         brand.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
             brand,
-            text="Q",
+            text="",
+            image=brand_image(38),
             width=38,
             height=38,
-            corner_radius=11,
-            fg_color=ACCENT,
-            text_color="white",
-            font=font(18, "bold"),
+            fg_color="transparent",
         ).grid(row=0, column=0, rowspan=2, padx=(0, 11))
         self._brand_name = ctk.CTkLabel(
             brand,

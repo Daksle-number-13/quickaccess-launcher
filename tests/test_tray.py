@@ -66,6 +66,12 @@ class TrayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_tray_icon(8)
 
+    def test_generated_icon_contains_blue_and_white_signature(self) -> None:
+        icon = create_tray_icon(64)
+        opaque = [pixel for pixel in icon.get_flattened_data() if pixel[3] > 240]
+        self.assertTrue(any(red < 40 and blue > 150 for red, _green, blue, _alpha in opaque))
+        self.assertTrue(any(red > 245 and green > 245 and blue > 245 for red, green, blue, _alpha in opaque))
+
     def test_menu_callbacks_only_enqueue_commands(self) -> None:
         bus = CommandBus()
         tray = TrayService(bus, backend=FakeBackend)

@@ -31,6 +31,7 @@ from .theme import (
     WARNING_SOFT,
     WARNING_SOFT_HOVER,
     WINDOW_RADIUS,
+    brand_image,
     font,
     icon_font,
 )
@@ -526,13 +527,11 @@ class PopupPanel(ctk.CTkToplevel):
 
         brand_mark = ctk.CTkLabel(
             header,
-            text="Q",
+            text="",
+            image=brand_image(30),
             width=30,
             height=30,
-            corner_radius=9,
-            fg_color=ACCENT,
-            text_color="#FFFFFF",
-            font=font(13, "bold"),
+            fg_color="transparent",
         )
         brand_mark.grid(row=0, column=0, padx=(0, 9))
         ctk.CTkLabel(

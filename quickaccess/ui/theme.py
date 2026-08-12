@@ -10,6 +10,10 @@ from functools import lru_cache
 import os
 from pathlib import Path
 
+import customtkinter as ctk
+
+from quickaccess.branding import create_brand_icon
+
 
 Color = tuple[str, str]
 
@@ -72,6 +76,13 @@ def icon_font(size: int) -> tuple[str, int]:
     return (_resolved_icon_font_family(), size)
 
 
+def brand_image(size: int) -> ctk.CTkImage:
+    """Return the shared Park Jin-Su signature mark for a CTk widget."""
+
+    artwork = create_brand_icon(max(32, size * 2))
+    return ctk.CTkImage(light_image=artwork, dark_image=artwork, size=(size, size))
+
+
 __all__ = [
     "ACCENT",
     "ACCENT_HOVER",
@@ -99,5 +110,6 @@ __all__ = [
     "WARNING_SOFT_HOVER",
     "WINDOW_RADIUS",
     "font",
+    "brand_image",
     "icon_font",
 ]
