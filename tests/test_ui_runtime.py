@@ -6,9 +6,11 @@ import time
 import unittest
 
 import customtkinter as ctk
+from PIL import Image
 
 from quickaccess.ui.dialogs import ToastManager
 from quickaccess.models import LauncherConfig
+from quickaccess.services.icons import icon_key
 from quickaccess.services.monitor import Point, Rect
 from quickaccess.services.validation import PathStatus
 from quickaccess.ui.popup import PopupActions, PopupPanel
@@ -257,6 +259,32 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             popup._copy_path(config.items[0].path)
             self.root.update()
             self.assertEqual(popup.clipboard_get(), config.items[0].path)
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_popup_renders_a_ready_icon_image_instead_of_the_glyph(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            pixels = bytes([10, 20, 30, 255] * (24 * 24))
+            pil_image = Image.frombuffer("RGBA", (24, 24), pixels, "raw", "BGRA", 0, 1)
+            icon = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(24, 24))
+            key = icon_key(config.items[0].path, config.items[0].type)
+
+            popup.show(config, {}, Point(20, 20), Rect(0, 0, 1920, 1040), icons={key: icon})
+            self.root.update()
+
+            self.assertIs(popup._cards[0]._icon_label.cget("image"), icon)
         finally:
             popup.hide()
             self.root.after(50, self.root.quit)

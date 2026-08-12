@@ -10,6 +10,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from ..models import LauncherConfig, LauncherItem
+from ..services.icons import icon_key
 from ..services.monitor import Point, Rect, Size, clamp_window_to_work_area
 from ..services.validation import PathStatus
 from .theme import (
@@ -151,6 +152,7 @@ class _LauncherCard(ctk.CTkFrame):
         status: PathStatus | None,
         command: Callable[[], None],
         on_context_menu: Callable[[tk.Event[tk.Misc]], None] | None = None,
+        icon: ctk.CTkImage | None = None,
     ) -> None:
         self._broken = status is not None and status is not PathStatus.VALID
         self._timed_out = status is PathStatus.TIMEOUT
@@ -201,16 +203,23 @@ class _LauncherCard(ctk.CTkFrame):
         )
         icon_tile.grid(row=0, column=0, rowspan=2, padx=(10, 9), pady=14)
         icon_tile.grid_propagate(False)
-        glyph = _GLYPH_FOLDER if item.type == "folder" else _GLYPH_FILE
-        icon_label = ctk.CTkLabel(
-            icon_tile,
-            text=glyph,
-            width=38,
-            height=38,
-            font=icon_font(17),
-            text_color=self._resting_border if self._broken else ACCENT,
-        )
+        if icon is not None and not self._broken:
+            # A real shell icon is only shown once one has actually been
+            # extracted; the broken-path glyph coloring always wins so the
+            # card still reads as needing attention.
+            icon_label = ctk.CTkLabel(icon_tile, text="", image=icon, width=38, height=38)
+        else:
+            glyph = _GLYPH_FOLDER if item.type == "folder" else _GLYPH_FILE
+            icon_label = ctk.CTkLabel(
+                icon_tile,
+                text=glyph,
+                width=38,
+                height=38,
+                font=icon_font(17),
+                text_color=self._resting_border if self._broken else ACCENT,
+            )
         icon_label.pack(fill="both", expand=True)
+        self._icon_label = icon_label
 
         name_label = ctk.CTkLabel(
             self,
@@ -329,7 +338,9 @@ class PopupPanel(ctk.CTkToplevel):
         statuses: Mapping[str, PathStatus],
         anchor: Point,
         work_area: Rect,
+        icons: Mapping[str, ctk.CTkImage] | None = None,
     ) -> None:
+        icons = icons or {}
         self._show_generation += 1
         show_generation = self._show_generation
         self._arming_focus = True
@@ -351,6 +362,7 @@ class PopupPanel(ctk.CTkToplevel):
             statuses,
             columns,
             render_viewport_height,
+            icons,
         )
         if signature != self._render_signature:
             self._render_content(
@@ -358,6 +370,7 @@ class PopupPanel(ctk.CTkToplevel):
                 statuses,
                 columns=columns,
                 viewport_height=viewport_height,
+                icons=icons,
             )
             self._render_signature = signature
 
@@ -381,6 +394,7 @@ class PopupPanel(ctk.CTkToplevel):
                 work_area,
                 applied_scale=layout_scale,
                 attempts_remaining=2,
+                icons=icons,
             ),
         )
 
@@ -389,9 +403,11 @@ class PopupPanel(ctk.CTkToplevel):
         config: LauncherConfig,
         statuses: Mapping[str, PathStatus],
         work_area: Rect,
+        icons: Mapping[str, ctk.CTkImage] | None = None,
     ) -> None:
         """Build hidden popup content so the first hotkey press is immediate."""
 
+        icons = icons or {}
         layout_scale = self._get_window_scaling()
         _width, _height, columns, viewport_height = popup_dimensions(
             len(config.items),
@@ -409,6 +425,7 @@ class PopupPanel(ctk.CTkToplevel):
             statuses,
             columns,
             render_viewport_height,
+            icons,
         )
         if signature == self._render_signature:
             return
@@ -417,6 +434,7 @@ class PopupPanel(ctk.CTkToplevel):
             statuses,
             columns=columns,
             viewport_height=viewport_height,
+            icons=icons,
         )
         self._render_signature = signature
 
@@ -426,6 +444,7 @@ class PopupPanel(ctk.CTkToplevel):
         statuses: Mapping[str, PathStatus],
         columns: int,
         viewport_height: int | None,
+        icons: Mapping[str, ctk.CTkImage],
     ) -> tuple[object, ...]:
         ordered_items = sorted(config.items, key=lambda value: value.order)
         return (
@@ -443,6 +462,7 @@ class PopupPanel(ctk.CTkToplevel):
                         if statuses.get(item.id) in (None, PathStatus.VALID)
                         else statuses.get(item.id)
                     ),
+                    icons.get(icon_key(item.path, item.type)),
                 )
                 for item in ordered_items
             ),
@@ -455,6 +475,7 @@ class PopupPanel(ctk.CTkToplevel):
         *,
         columns: int,
         viewport_height: int,
+        icons: Mapping[str, ctk.CTkImage],
     ) -> None:
         self._clear()
 
@@ -503,6 +524,7 @@ class PopupPanel(ctk.CTkToplevel):
                     statuses.get(item.id),
                     index // columns,
                     index % columns,
+                    icons.get(icon_key(item.path, item.type)),
                 )
 
     def _settle_dpi(
@@ -515,6 +537,7 @@ class PopupPanel(ctk.CTkToplevel):
         *,
         applied_scale: float,
         attempts_remaining: int,
+        icons: Mapping[str, ctk.CTkImage] | None = None,
     ) -> None:
         if show_generation != self._show_generation or not self._visible:
             return
@@ -522,7 +545,7 @@ class PopupPanel(ctk.CTkToplevel):
         if abs(current_scale - applied_scale) > 0.01:
             # WM_DPICHANGED has settled after crossing monitors.  Rebuilding
             # once also recalculates the effective column count and viewport.
-            self.show(config, statuses, anchor, work_area)
+            self.show(config, statuses, anchor, work_area, icons=icons)
             return
         if attempts_remaining:
             self.after(
@@ -535,6 +558,7 @@ class PopupPanel(ctk.CTkToplevel):
                     work_area,
                     applied_scale=applied_scale,
                     attempts_remaining=attempts_remaining - 1,
+                    icons=icons,
                 ),
             )
 
@@ -629,6 +653,7 @@ class PopupPanel(ctk.CTkToplevel):
         status: PathStatus | None,
         row: int,
         column: int,
+        icon: ctk.CTkImage | None = None,
     ) -> None:
         broken = status is not None and status is not PathStatus.VALID
         callback = (
@@ -644,6 +669,7 @@ class PopupPanel(ctk.CTkToplevel):
             on_context_menu=lambda event, name=item.name, path=item.path: (
                 self._show_context_menu(event, name, path)
             ),
+            icon=icon,
         )
         horizontal_padding = (
             GAP // 2 if column > 0 else 0,

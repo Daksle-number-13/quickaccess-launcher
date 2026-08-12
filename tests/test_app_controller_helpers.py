@@ -113,6 +113,14 @@ class _ValidatorRecorder:
         self.validated.append((item_id, path))
 
 
+class _IconRequestRecorder:
+    def __init__(self) -> None:
+        self.requested: list[tuple[str, str]] = []
+
+    def request(self, key: str, path: str) -> None:
+        self.requested.append((key, path))
+
+
 class _DeleteUndoHarness:
     def __init__(self) -> None:
         self.config = LauncherConfig(items=[])
@@ -122,6 +130,7 @@ class _DeleteUndoHarness:
         self.toast = _ToastRecorder()
         self.settings = None
         self.validator = _ValidatorRecorder()
+        self.icons = _IconRequestRecorder()
 
     def _commit(self, mutator: object, _message: str) -> bool:
         mutator(self.config)  # type: ignore[operator]

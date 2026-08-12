@@ -16,6 +16,7 @@ from tkinter import filedialog
 from typing import Any
 
 import customtkinter as ctk
+from PIL import Image
 
 from . import __version__
 from .commands import (
@@ -23,6 +24,7 @@ from .commands import (
     CommandBus,
     CommandBusClosedError,
     CommandSource,
+    IconReadyCommand,
     LaunchResultCommand,
     OpenPanelCommand,
     OpenSettingsCommand,
@@ -43,6 +45,7 @@ from .services.explorer import (
     get_foreground_window,
 )
 from .services.hotkeys import NativeHotkeyService
+from .services.icons import IconImage, IconService, icon_key
 from .services.launcher import FileLauncher
 from .services.launcher import LaunchResult
 from .services.monitor import NativeMonitorService, Point, Rect
@@ -113,8 +116,13 @@ class QuickAccessApp:
             timeout_seconds=2.0,
             on_callback_error=self._background_error,
         )
+        self.icons = IconService(
+            self._publish_icon_ready,
+            on_callback_error=self._background_error,
+        )
 
         self.statuses: dict[str, PathStatus] = {}
+        self.icon_images: dict[str, ctk.CTkImage] = {}
         self.popup: PopupPanel | None = None
         self.settings: SettingsWindow | None = None
         self._last_anchor: Point | None = None
@@ -154,6 +162,7 @@ class QuickAccessApp:
 
         self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
         self._validate_all_paths()
+        self._request_all_icons()
         if not self.smoke_test:
             # Delayed well past startup so a slow or firewalled network call
             # never competes with hotkey/tray registration for attention.
@@ -222,6 +231,8 @@ class QuickAccessApp:
             self.toast.show(command.message, kind=command.level.value)
         elif isinstance(command, UpdateAvailableCommand):
             self._apply_update_check(command.result)
+        elif isinstance(command, IconReadyCommand):
+            self._apply_icon_ready(command.key, command.image)
         elif isinstance(command, QuitCommand):
             self.shutdown()
 
@@ -300,7 +311,7 @@ class QuickAccessApp:
         popup = self._ensure_popup()
         self._last_anchor = anchor
         self._last_work_area = work_area
-        popup.show(self.config, self.statuses, anchor, work_area)
+        popup.show(self.config, self.statuses, anchor, work_area, icons=self.icon_images)
 
     def _ensure_popup(self) -> PopupPanel:
         if self.popup is None or not self.popup.winfo_exists():
@@ -320,7 +331,9 @@ class QuickAccessApp:
         try:
             anchor = self.monitor.get_cursor_position()
             work_area = self.monitor.get_monitor_work_area(anchor)
-            self._ensure_popup().prepare(self.config, self.statuses, work_area)
+            self._ensure_popup().prepare(
+                self.config, self.statuses, work_area, icons=self.icon_images
+            )
         except Exception:
             # Prewarming is only a latency optimization.  The normal open path
             # retains its complete monitor fallback and error handling.
@@ -381,6 +394,7 @@ class QuickAccessApp:
         item = self.config.get_item(item_id[0])
         self.statuses.pop(item.id, None)
         self.validator.validate(item.id, item.path)
+        self.icons.request(icon_key(item.path, item.type), item.path)
         return True
 
     def delete_item(self, item_id: str) -> bool:
@@ -418,6 +432,7 @@ class QuickAccessApp:
         restored_item = self.config.get_item(restored_id[0])
         self.statuses.pop(restored_item.id, None)
         self.validator.validate(restored_item.id, restored_item.path)
+        self.icons.request(icon_key(restored_item.path, restored_item.type), restored_item.path)
         if self.settings is not None and self.settings.winfo_viewable():
             self.settings.refresh()
         self.toast.show(f"'{name}' 항목을 복구했습니다.", kind="success")
@@ -597,6 +612,7 @@ class QuickAccessApp:
             self.statuses.pop(item_id, None)
             new_item = self.config.get_item(item_id)
             self.validator.validate(new_item.id, new_item.path)
+            self.icons.request(icon_key(new_item.path, new_item.type), new_item.path)
             self.toast.show("경로를 재지정했습니다.", kind="success")
 
     def _validate_all_paths(self) -> None:
@@ -606,8 +622,43 @@ class QuickAccessApp:
             except Exception:
                 LOGGER.exception("Failed to schedule path validation for %s", item.path)
 
+    def _request_all_icons(self) -> None:
+        if not self.icons.available:
+            return
+        for item in self.config.items:
+            try:
+                self.icons.request(icon_key(item.path, item.type), item.path)
+            except Exception:
+                LOGGER.exception("Failed to schedule icon extraction for %s", item.path)
+
     def _publish_validation_result(self, result: ValidationResult) -> None:
         self._safe_publish(ValidationResultCommand(result=result))
+
+    def _publish_icon_ready(self, key: str, image: IconImage) -> None:
+        self._safe_publish(IconReadyCommand(key=key, image=image))
+
+    def _apply_icon_ready(self, key: str, image: object) -> None:
+        if not isinstance(image, IconImage) or key in self.icon_images:
+            return
+        try:
+            pil_image = Image.frombuffer(
+                "RGBA",
+                (image.width, image.height),
+                image.bgra,
+                "raw",
+                "BGRA",
+                0,
+                1,
+            )
+            self.icon_images[key] = ctk.CTkImage(
+                light_image=pil_image,
+                dark_image=pil_image,
+                size=(24, 24),
+            )
+        except Exception:
+            LOGGER.exception("Unable to build an icon image for %r", key)
+            return
+        self._refresh_visible_popup()
 
     def _apply_validation_result(self, result: object) -> None:
         if not isinstance(result, ValidationResult):
@@ -643,6 +694,7 @@ class QuickAccessApp:
             self.statuses,
             self._last_anchor,
             self._last_work_area,
+            icons=self.icon_images,
         )
 
     def _begin_quick_add(self, explorer_hwnd: int | None) -> None:

@@ -27,6 +27,7 @@ class CommandType(str, Enum):
     LAUNCH_RESULT = "launch_result"
     SHOW_TOAST = "show_toast"
     UPDATE_AVAILABLE = "update_available"
+    ICON_READY = "icon_ready"
     QUIT = "quit"
 
 
@@ -144,6 +145,20 @@ class UpdateAvailableCommand:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class IconReadyCommand:
+    """Deliver a decoded shell icon bitmap back to the Tk thread."""
+
+    key: str
+    image: object
+    source: CommandSource = CommandSource.WORKER
+    created_at: float = field(default_factory=time.monotonic, compare=False)
+    type: CommandType = field(default=CommandType.ICON_READY, init=False)
+
+    def __post_init__(self) -> None:
+        _require_text(self.key, "key")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class QuitCommand:
     """Ask the UI thread to perform the coordinated shutdown sequence."""
 
@@ -162,6 +177,7 @@ AppCommand: TypeAlias = (
     | LaunchResultCommand
     | ShowToastCommand
     | UpdateAvailableCommand
+    | IconReadyCommand
     | QuitCommand
 )
 
