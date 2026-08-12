@@ -3,6 +3,19 @@
 전역 핫키로 마우스 커서 위치에 버튼 패널을 띄우고, 자주 쓰는 Windows
 폴더와 파일을 한 번의 클릭으로 여는 상주형 런처입니다.
 
+## 동작 화면
+
+`Ctrl+Space`를 누르면 마우스 커서가 있는 모니터에 빠른 실행 패널이 즉시
+표시됩니다. 정상 경로는 한 번의 클릭으로 열고, 찾을 수 없는 경로는 같은
+카드에서 바로 재지정할 수 있습니다.
+
+![QuickAccess 빠른 실행 패널](docs/screenshots/quickaccess-popup-light.png)
+
+환경 설정에서는 화면 스타일, 패널 열 수, 전역 단축키와 Windows 자동 실행을
+한곳에서 변경할 수 있습니다.
+
+![QuickAccess 환경 설정](docs/screenshots/quickaccess-settings-light.png)
+
 ## 주요 기능
 
 - `Ctrl+Space`: 커서가 있는 모니터의 작업 영역 안에 런처 패널 표시
