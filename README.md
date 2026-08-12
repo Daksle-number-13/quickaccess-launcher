@@ -14,6 +14,16 @@
 사용하도록 자동화되어 있습니다. SignPath 승인 전에 게시된 바이너리는
 미서명 상태일 수 있으므로 각 Release의 서명 안내를 확인하세요.
 
+### Code signing policy
+
+- Free code signing provided by [SignPath.io](https://signpath.io/), certificate by
+  [SignPath Foundation](https://signpath.org/).
+- Committer and reviewer: [Daksle](https://github.com/Daksle-number-13)
+- Approver: [Daksle](https://github.com/Daksle-number-13)
+- Signed release artifacts are built from this public repository by GitHub Actions.
+- Privacy: This program will not transfer any information to other networked systems
+  unless specifically requested by the user or the person installing or operating it.
+
 ## 동작 화면
 
 `Ctrl+Space`를 누르면 마우스 커서가 있는 모니터에 빠른 실행 패널이 즉시
