@@ -197,6 +197,8 @@ def _load_native_api() -> _IconApi | None:
 def icon_key(path: str, item_type: str) -> str:
     if item_type == "folder":
         return "\0folder"
+    if item_type == "url":
+        return "\0url"
     extension = ntpath.splitext(path)[1].strip().lower()
     return extension or "\0file"
 

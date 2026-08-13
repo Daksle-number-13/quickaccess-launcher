@@ -32,6 +32,7 @@ def sample_config() -> LauncherConfig:
             LauncherItem(name="불량 집계", path=r"C:\Quality\Reports\불량집계.xlsx", type="file", order=1),
             LauncherItem(name="주간 회의록", path=r"C:\Quality\Meetings\2026", type="folder", order=2),
             LauncherItem(name="검사 기준서", path=r"Z:\Shared\검사 기준서.pdf", type="file", order=3),
+            LauncherItem(name="사내 포털", path="https://example.com/portal", type="url", order=4),
         ],
     )
 
@@ -64,7 +65,7 @@ def render(mode: str, appearance: str, output: Path, page: str) -> None:
         )
         widget.show(
             config,
-            {config.items[-1].id: PathStatus.MISSING},
+            {config.items[3].id: PathStatus.MISSING},
             Point(80, 80),
             Rect(0, 0, 1920, 1040),
         )
@@ -91,6 +92,9 @@ def render(mode: str, appearance: str, output: Path, page: str) -> None:
     # owns foreground focus.  Production windows keep their normal policy.
     widget.attributes("-topmost", True)
     if mode == "popup":
+        # A documentation capture must not disappear if the screenshot tool
+        # briefly takes foreground focus from the production-style flyout.
+        widget.unbind("<FocusOut>")
         widget.geometry("+80+80")
 
     root.after(2500, lambda: capture(widget, output, root))

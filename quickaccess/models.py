@@ -12,10 +12,11 @@ import ntpath
 import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 import uuid
 
 
-ItemType = Literal["folder", "file"]
+ItemType = Literal["folder", "file", "url"]
 AppearanceMode = Literal["system", "light", "dark"]
 
 DEFAULT_HOTKEY = "ctrl+space"
@@ -52,6 +53,30 @@ def detect_item_type(path: str | os.PathLike[str]) -> ItemType:
         return "folder" if os.path.isdir(os.fspath(path)) else "file"
     except (OSError, TypeError, ValueError):
         return "file"
+
+
+def normalize_web_url(value: str | os.PathLike[str]) -> str:
+    """Return a safe HTTP(S) URL, adding HTTPS when the scheme is omitted."""
+
+    text = _optional_text(value)
+    if not text:
+        raise ValueError("Web URL must not be empty")
+    if any(character.isspace() or ord(character) < 32 for character in text) or "\\" in text:
+        raise ValueError("Web URL must not contain whitespace or control characters")
+    candidate = text if "://" in text else f"https://{text}"
+    try:
+        parsed = urlsplit(candidate)
+        # Accessing ``port`` also rejects malformed values such as ``:abc``.
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError("Invalid web URL") from error
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Only HTTP and HTTPS web URLs are supported")
+    if parsed.username or parsed.password:
+        raise ValueError("Web URLs containing credentials are not supported")
+    return urlunsplit(
+        (parsed.scheme.lower(), parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _coerce_order(value: object, fallback: int) -> int:
@@ -117,8 +142,10 @@ class LauncherItem:
 
         self.name = _optional_text(self.name) or _display_name(self.path)
         self.id = _optional_text(self.id) or _new_id()
-        if self.type not in ("folder", "file"):
+        if self.type not in ("folder", "file", "url"):
             self.type = detect_item_type(self.path)
+        if self.type == "url":
+            self.path = normalize_web_url(self.path)
         self.order = _coerce_order(self.order, 0)
 
     @classmethod
@@ -136,7 +163,7 @@ class LauncherItem:
             raise ValueError("Launcher item is missing a path")
 
         item_type = data.get("type")
-        if item_type not in ("folder", "file"):
+        if item_type not in ("folder", "file", "url"):
             item_type = detect_item_type(path)
 
         return cls(
@@ -363,7 +390,9 @@ class LauncherConfig:
             raise ValueError("Launcher item path must not be empty")
 
         resolved_type = (
-            item_type if item_type in ("folder", "file") else detect_item_type(path_text)
+            item_type
+            if item_type in ("folder", "file", "url")
+            else detect_item_type(path_text)
         )
         item = LauncherItem(
             id=_optional_text(item_id) or _new_id(),
@@ -421,8 +450,12 @@ class LauncherConfig:
         item = self.get_item(item_id)
         item.path = path_text
         item.type = (
-            item_type if item_type in ("folder", "file") else detect_item_type(path_text)
+            item_type
+            if item_type in ("folder", "file", "url")
+            else detect_item_type(path_text)
         )
+        if item.type == "url":
+            item.path = normalize_web_url(item.path)
         return item
 
     def set_columns(self, columns: int) -> int:

@@ -15,6 +15,7 @@ from quickaccess.models import (
     DEFAULT_HOTKEY,
     DEFAULT_QUICK_ADD_HOTKEY,
     LauncherConfig,
+    normalize_web_url,
 )
 from quickaccess.storage import ConfigStore
 
@@ -137,6 +138,27 @@ class LauncherConfigTests(unittest.TestCase):
                 config.rename_item("missing", "name")
             with self.assertRaises(ValueError):
                 config.rename_item(file_item.id, "   ")
+
+    def test_web_links_are_normalized_and_round_trip(self) -> None:
+        config = LauncherConfig(items=[])
+        item = config.add_item("example.com/docs?q=1", name="문서", item_type="url")
+
+        self.assertEqual("url", item.type)
+        self.assertEqual("https://example.com/docs?q=1", item.path)
+        restored = LauncherConfig.from_dict(config.to_dict())
+        self.assertEqual("url", restored.items[0].type)
+        self.assertEqual(item.path, restored.items[0].path)
+
+    def test_web_link_rejects_unsafe_or_invalid_schemes(self) -> None:
+        for value in (
+            "",
+            "javascript:alert(1)",
+            "file:///C:/secret",
+            "https://bad host",
+            r"https://example.com\@evil.test",
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                normalize_web_url(value)
 
 
 class ConfigStoreTests(unittest.TestCase):

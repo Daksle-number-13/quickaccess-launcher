@@ -47,6 +47,7 @@ HEADER_GAP = 10
 
 _GLYPH_FOLDER = "\uE8B7"
 _GLYPH_FILE = "\uE8A5"
+_GLYPH_LINK = "\uE71B"
 _GLYPH_SETTINGS = "\uE713"
 _TRANSPARENT_KEY = "#010203"
 
@@ -137,6 +138,8 @@ def _status_text(item: LauncherItem, status: PathStatus | None) -> str:
         return "응답 없음 · 재지정"
     if status is PathStatus.ERROR:
         return "확인 실패 · 재지정"
+    if item.type == "url":
+        return "웹 링크"
     return "폴더" if item.type == "folder" else "파일"
 
 
@@ -208,7 +211,11 @@ class _LauncherCard(ctk.CTkFrame):
             # card still reads as needing attention.
             icon_label = ctk.CTkLabel(icon_tile, text="", image=icon, width=34, height=34)
         else:
-            glyph = _GLYPH_FOLDER if item.type == "folder" else _GLYPH_FILE
+            glyph = (
+                _GLYPH_LINK
+                if item.type == "url"
+                else (_GLYPH_FOLDER if item.type == "folder" else _GLYPH_FILE)
+            )
             icon_label = ctk.CTkLabel(
                 icon_tile,
                 text=glyph,

@@ -7,13 +7,14 @@ from dataclasses import dataclass
 import ntpath
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from urllib.parse import urlsplit
 
 import customtkinter as ctk
 
-from ..models import LauncherConfig, LauncherItem
+from ..models import LauncherConfig, LauncherItem, normalize_web_url
 from ..services.hotkeys import describe_hotkey_conflict_risk
 from ..services.monitor import NativeMonitorService, Rect, Size, center_window_in_work_area
-from .dialogs import ask_display_name, position_geometry
+from .dialogs import TextInputDialog, ask_display_name, position_geometry
 from .theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -42,6 +43,7 @@ WINDOW_FRAME_BUDGET = 120
 
 ICON_FOLDER = "\ue8b7"
 ICON_FILE = "\ue8a5"
+ICON_LINK = "\ue71b"
 ICON_EDIT = "\ue70f"
 ICON_DELETE = "\ue74d"
 
@@ -90,6 +92,7 @@ class SettingsActions:
     set_startup: Callable[[bool], bool]
     set_update_checks: Callable[[bool], bool]
     set_hotkeys: Callable[[str, str], bool]
+    edit_item: Callable[..., bool] = lambda *_args, **_kwargs: False
 
 
 class SettingsWindow(ctk.CTkToplevel):
@@ -264,7 +267,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._items_title.grid(row=0, column=0, sticky="w")
         self._items_subtitle = ctk.CTkLabel(
             header,
-            text="자주 쓰는 파일과 폴더를 원하는 순서로 관리하세요.",
+            text="자주 쓰는 파일, 폴더, 웹 링크를 원하는 순서로 관리하세요.",
             font=font(11),
             text_color=MUTED,
             anchor="w",
@@ -300,6 +303,19 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._add_file,
         )
         self._add_file_button.grid(row=0, column=2, rowspan=2)
+        self._add_link_button = ctk.CTkButton(
+            header,
+            text="＋  웹 링크",
+            width=112,
+            height=38,
+            corner_radius=10,
+            fg_color=ACCENT_SOFT,
+            hover_color=SURFACE_HOVER,
+            text_color=ACCENT,
+            font=font(11, "bold"),
+            command=self._add_link,
+        )
+        self._add_link_button.grid(row=0, column=3, rowspan=2, padx=(8, 0))
 
         list_card = ctk.CTkFrame(
             page,
@@ -714,25 +730,48 @@ class SettingsWindow(ctk.CTkToplevel):
             for description in self._settings_descriptions:
                 description.grid()
 
-        if ultra_compact:
+        if compact:
             self._items_header.grid_columnconfigure(0, weight=1)
             self._items_header.grid_columnconfigure(1, weight=1)
-            self._items_title.grid_configure(row=0, column=0, columnspan=2)
-            self._add_folder_button.configure(text="폴더", width=82, height=34)
+            self._items_header.grid_columnconfigure(2, weight=1)
+            self._items_title.grid_configure(row=0, column=0, columnspan=3)
+            compact_button_width = 58 if ultra_compact else 90
+            self._add_folder_button.configure(
+                text="폴더" if ultra_compact else "＋  폴더",
+                width=compact_button_width,
+                height=34,
+            )
             self._add_folder_button.grid_configure(
                 row=1,
                 column=0,
                 rowspan=1,
-                padx=(0, 4),
+                padx=(0, 3),
                 pady=(8, 0),
                 sticky="ew",
             )
-            self._add_file_button.configure(text="파일", width=82, height=34)
+            self._add_file_button.configure(
+                text="파일" if ultra_compact else "＋  파일",
+                width=compact_button_width,
+                height=34,
+            )
             self._add_file_button.grid_configure(
                 row=1,
                 column=1,
                 rowspan=1,
-                padx=(4, 0),
+                padx=3,
+                pady=(8, 0),
+                sticky="ew",
+            )
+            self._add_link_button.configure(
+                text="링크" if ultra_compact else "＋  링크",
+                width=compact_button_width,
+                height=34,
+            )
+            self._add_link_button.grid_configure(
+                row=1,
+                column=2,
+                rowspan=1,
+                padx=(3, 0),
                 pady=(8, 0),
                 sticky="ew",
             )
@@ -791,6 +830,15 @@ class SettingsWindow(ctk.CTkToplevel):
                 column=2,
                 rowspan=2,
                 padx=0,
+                pady=0,
+                sticky="",
+            )
+            self._add_link_button.configure(text="＋  웹 링크", width=112, height=38)
+            self._add_link_button.grid_configure(
+                row=0,
+                column=3,
+                rowspan=2,
+                padx=(8, 0),
                 pady=0,
                 sticky="",
             )
@@ -1020,9 +1068,10 @@ class SettingsWindow(ctk.CTkToplevel):
         card.grid_columnconfigure(1, weight=1)
 
         is_folder = item.type == "folder"
+        item_icon = ICON_LINK if item.type == "url" else (ICON_FOLDER if is_folder else ICON_FILE)
         ctk.CTkLabel(
             card,
-            text=ICON_FOLDER if is_folder else ICON_FILE,
+            text=item_icon,
             width=40,
             height=40,
             corner_radius=10,
@@ -1065,7 +1114,7 @@ class SettingsWindow(ctk.CTkToplevel):
             button_parent,
             text="수정",
             column=button_columns[0],
-            command=lambda value=item: self._rename(value),
+            command=lambda value=item: self._edit(value),
         )
         self._row_button(
             button_parent,
@@ -1137,7 +1186,49 @@ class SettingsWindow(ctk.CTkToplevel):
             "file",
         )
 
-    def _rename(self, item: LauncherItem) -> None:
+    def _add_link(self) -> None:
+        value = TextInputDialog(
+            self,
+            title="웹 링크 추가",
+            prompt="인터넷 주소를 입력하세요.",
+            initial_value="https://",
+            validator=self._validate_web_url,
+        ).show()
+        if value is None:
+            return
+        url = normalize_web_url(value)
+        hostname = urlsplit(url).hostname or url
+        name = ask_display_name(self, hostname, title="웹 링크 이름")
+        if name is not None:
+            self._actions.add_item(url, name, item_type="url")
+            self.refresh()
+
+    @staticmethod
+    def _validate_web_url(value: str) -> str | None:
+        try:
+            normalize_web_url(value)
+        except ValueError:
+            return "http:// 또는 https:// 웹 주소를 입력해 주세요."
+        return None
+
+    def _edit(self, item: LauncherItem) -> None:
+        if item.type == "url":
+            value = TextInputDialog(
+                self,
+                title="웹 링크 수정",
+                prompt="인터넷 주소를 입력하세요.",
+                initial_value=item.path,
+                validator=self._validate_web_url,
+            ).show()
+            if value is None:
+                return
+            url = normalize_web_url(value)
+            name = ask_display_name(self, item.name, title="웹 링크 이름")
+            if name is not None:
+                self._actions.edit_item(item.id, name, url, item_type="url")
+                self.refresh()
+            return
+
         name = ask_display_name(self, item.name, title="표시명 수정")
         if name is not None:
             self._actions.rename_item(item.id, name)

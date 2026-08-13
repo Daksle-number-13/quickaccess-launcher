@@ -37,7 +37,7 @@ from .commands import (
     ValidationResultCommand,
 )
 from .logging_setup import close_logging, configure_logging, install_exception_hooks
-from .models import LauncherConfig
+from .models import LauncherConfig, normalize_web_url
 from .platform import enable_dpi_awareness, require_windows
 from .services.explorer import (
     ExplorerQuickAddService,
@@ -55,7 +55,7 @@ from .services.tray import TrayService
 from .services.update_check import DEFAULT_REPO, UpdateCheckResult, check_for_update
 from .services.validation import PathStatus, PathValidationService, ValidationResult
 from .storage import ConfigStore, LoadResult
-from .ui.dialogs import ToastManager, ask_display_name
+from .ui.dialogs import TextInputDialog, ToastManager, ask_display_name
 from .ui.popup import PopupActions, PopupPanel
 from .ui.settings import SettingsActions, SettingsWindow
 
@@ -356,6 +356,7 @@ class QuickAccessApp:
                     set_startup=self.set_startup,
                     set_update_checks=self.set_update_checks,
                     set_hotkeys=self.set_hotkeys,
+                    edit_item=self.edit_item,
                 ),
             )
         self.settings.show()
@@ -394,8 +395,9 @@ class QuickAccessApp:
             return False
         item = self.config.get_item(item_id[0])
         self.statuses.pop(item.id, None)
-        self.validator.validate(item.id, item.path)
-        self.icons.request(icon_key(item.path, item.type), item.path)
+        if item.type != "url":
+            self.validator.validate(item.id, item.path)
+            self.icons.request(icon_key(item.path, item.type), item.path)
         return True
 
     def delete_item(self, item_id: str) -> bool:
@@ -432,8 +434,9 @@ class QuickAccessApp:
             return
         restored_item = self.config.get_item(restored_id[0])
         self.statuses.pop(restored_item.id, None)
-        self.validator.validate(restored_item.id, restored_item.path)
-        self.icons.request(icon_key(restored_item.path, restored_item.type), restored_item.path)
+        if restored_item.type != "url":
+            self.validator.validate(restored_item.id, restored_item.path)
+            self.icons.request(icon_key(restored_item.path, restored_item.type), restored_item.path)
         if self.settings is not None and self.settings.winfo_viewable():
             self.settings.refresh()
         self.toast.show(f"'{name}' 항목을 복구했습니다.", kind="success")
@@ -443,6 +446,27 @@ class QuickAccessApp:
             lambda config: config.rename_item(item_id, new_name),
             "표시명을 변경하지 못했습니다",
         )
+
+    def edit_item(
+        self,
+        item_id: str,
+        new_name: str,
+        new_path: str,
+        *,
+        item_type: str | None = None,
+    ) -> bool:
+        def mutate(config: LauncherConfig) -> None:
+            config.rename_item(item_id, new_name)
+            config.replace_path(item_id, new_path, item_type=item_type)  # type: ignore[arg-type]
+
+        if not self._commit(mutate, "항목을 수정하지 못했습니다"):
+            return False
+        self.statuses.pop(item_id, None)
+        item = self.config.get_item(item_id)
+        if item.type != "url":
+            self.validator.validate(item.id, item.path)
+            self.icons.request(icon_key(item.path, item.type), item.path)
+        return True
 
     def move_item(self, item_id: str, new_index: int) -> bool:
         return self._commit(
@@ -602,7 +626,17 @@ class QuickAccessApp:
         except KeyError:
             return
         parent = self._dialog_parent()
-        if item.type == "folder":
+        if item.type == "url":
+            new_path = TextInputDialog(
+                parent,
+                title="웹 링크 수정",
+                prompt="새 인터넷 주소를 입력하세요.",
+                initial_value=item.path,
+                validator=lambda value: self._web_url_error(value),
+            ).show()
+            if new_path:
+                new_path = normalize_web_url(new_path)
+        elif item.type == "folder":
             new_path = filedialog.askdirectory(
                 parent=parent,
                 title=f"'{item.name}' 경로 재지정",
@@ -624,12 +658,23 @@ class QuickAccessApp:
         ):
             self.statuses.pop(item_id, None)
             new_item = self.config.get_item(item_id)
-            self.validator.validate(new_item.id, new_item.path)
-            self.icons.request(icon_key(new_item.path, new_item.type), new_item.path)
+            if new_item.type != "url":
+                self.validator.validate(new_item.id, new_item.path)
+                self.icons.request(icon_key(new_item.path, new_item.type), new_item.path)
             self.toast.show("경로를 재지정했습니다.", kind="success")
+
+    @staticmethod
+    def _web_url_error(value: str) -> str | None:
+        try:
+            normalize_web_url(value)
+        except ValueError:
+            return "http:// 또는 https:// 웹 주소를 입력해 주세요."
+        return None
 
     def _validate_all_paths(self) -> None:
         for item in self.config.items:
+            if item.type == "url":
+                continue
             try:
                 self.validator.validate(item.id, item.path)
             except Exception:
@@ -639,6 +684,8 @@ class QuickAccessApp:
         if not self.icons.available:
             return
         for item in self.config.items:
+            if item.type == "url":
+                continue
             try:
                 self.icons.request(icon_key(item.path, item.type), item.path)
             except Exception:
@@ -895,6 +942,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.smoke_test:
             load_result.config.run_on_startup = False
             load_result.config.welcome_shown = True
+            # Keep release verification isolated from a normally running
+            # QuickAccess instance, which usually owns Ctrl+Space already.
+            load_result.config.hotkey = "ctrl+alt+f23"
+            load_result.config.quick_add_hotkey = "ctrl+alt+f24"
             store.save(load_result.config)
 
         # Apply the persisted preference before constructing any widgets so a

@@ -100,6 +100,13 @@ class FileLauncherTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(opened, [r"C:\품질\불량.xlsx"])
 
+    def test_http_url_is_opened_by_the_windows_shell(self) -> None:
+        opened: list[str] = []
+        result = FileLauncher(opened.append).launch("https://example.com/docs")
+
+        self.assertTrue(result.success)
+        self.assertEqual(["https://example.com/docs"], opened)
+
     def test_shell_exception_is_returned_not_raised(self) -> None:
         def fail(path: str) -> None:
             raise OSError("association missing")

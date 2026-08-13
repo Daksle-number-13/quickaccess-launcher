@@ -38,6 +38,10 @@ class IconKeyTests(unittest.TestCase):
     def test_extensionless_files_do_not_collide_with_folders(self) -> None:
         self.assertNotEqual(icon_key(r"C:\README", "file"), icon_key(r"C:\A", "folder"))
 
+    def test_web_links_share_a_non_file_icon_key(self) -> None:
+        self.assertEqual("\0url", icon_key("https://example.com", "url"))
+        self.assertNotEqual(icon_key("https://example.com", "url"), icon_key("index", "file"))
+
 
 class IconServiceTests(unittest.TestCase):
     def test_unavailable_without_native_api_never_spawns_work(self) -> None:

@@ -1,15 +1,17 @@
 """QuickAccess launcher core package."""
 
-from .models import AppearanceMode, LauncherConfig, LauncherItem
+from .models import AppearanceMode, ItemType, LauncherConfig, LauncherItem, normalize_web_url
 from .storage import ConfigStore, LoadResult
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 __all__ = [
     "ConfigStore",
     "AppearanceMode",
+    "ItemType",
     "LauncherConfig",
     "LauncherItem",
     "LoadResult",
+    "normalize_web_url",
     "__version__",
 ]

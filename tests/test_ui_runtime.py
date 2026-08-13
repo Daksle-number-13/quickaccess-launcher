@@ -77,6 +77,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.assertTrue(window._ultra_compact)
         self.assertEqual(int(window._add_folder_button.grid_info()["row"]), 1)
         self.assertEqual(int(window._add_file_button.grid_info()["row"]), 1)
+        self.assertEqual(int(window._add_link_button.grid_info()["row"]), 1)
         window._select_page("preferences")
         deadline = time.monotonic() + 0.5
         while not window.winfo_viewable() and time.monotonic() < deadline:
@@ -104,6 +105,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.root.update()
         self.assertFalse(window._ultra_compact)
         self.assertEqual(int(window._add_folder_button.grid_info()["row"]), 0)
+        self.assertEqual(int(window._add_link_button.grid_info()["row"]), 0)
         window.destroy()
 
     def test_settings_appearance_control_uses_persisted_value(self) -> None:
