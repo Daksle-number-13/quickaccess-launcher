@@ -125,7 +125,26 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_items_page()
         self._build_preferences_page()
         self._select_page("items")
+        # CustomTkinter's global wheel handler can miss nested widgets and the
+        # scrollbar itself on Windows.  Route wheel input at the toplevel so
+        # the currently visible settings pane always scrolls.
+        self.bind("<MouseWheel>", self._on_mouse_wheel, add="+")
         self.refresh()
+
+    def _on_mouse_wheel(self, event: tk.Event[tk.Misc]) -> str | None:
+        delta = int(getattr(event, "delta", 0))
+        if delta == 0:
+            return None
+        scrollable = (
+            self._preferences_scroll if self._active_page == "preferences" else self._list
+        )
+        canvas: tk.Canvas = scrollable._parent_canvas
+        if canvas.yview() == (0.0, 1.0):
+            return None
+        notches = max(1, abs(delta) // 120)
+        direction = -1 if delta > 0 else 1
+        canvas.yview_scroll(direction * notches * 48, "units")
+        return "break"
 
     def _build_sidebar(self) -> None:
         sidebar = ctk.CTkFrame(

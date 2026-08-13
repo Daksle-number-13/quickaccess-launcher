@@ -108,6 +108,44 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(int(window._add_link_button.grid_info()["row"]), 0)
         window.destroy()
 
+    def test_settings_mouse_wheel_reaches_the_last_preference_card(self) -> None:
+        config = LauncherConfig.default()
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+            ),
+        )
+        window.geometry("760x520+0+0")
+        window._select_page("preferences")
+        window.deiconify()
+        self.root.update()
+        canvas = window._preferences_scroll._parent_canvas
+        start = canvas.yview()
+
+        for _ in range(12):
+            window._startup_card.event_generate("<MouseWheel>", delta=-120)
+        self.root.update()
+
+        self.assertGreater(canvas.yview()[0], start[0])
+        self.assertGreaterEqual(canvas.yview()[1], 0.99)
+        content_bounds = canvas.bbox("all")
+        assert content_bounds is not None
+        self.assertGreaterEqual(
+            canvas.canvasy(canvas.winfo_height()),
+            content_bounds[3] - 12,
+        )
+        window.destroy()
+
     def test_settings_appearance_control_uses_persisted_value(self) -> None:
         config = LauncherConfig.default()
         selected: list[str] = []
