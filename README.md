@@ -9,6 +9,10 @@
 `QuickAccess.exe`를 다운로드하면 별도의 Python 설치 없이 바로 실행할 수
 있습니다. Windows 10/11 x64를 지원합니다.
 
+처음 사용하는 분은 실제 화면이 포함된
+[QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
+따라 하면 됩니다.
+
 릴리스 바이너리의 Authenticode 서명은
 [SignPath Foundation](https://signpath.org/)의 무료 오픈소스 코드 서명 프로그램을
 사용하도록 자동화되어 있습니다. SignPath 승인 전에 게시된 바이너리는
