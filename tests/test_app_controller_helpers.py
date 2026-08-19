@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -156,7 +157,109 @@ class _UpdateCheckHarness:
         self.check_calls += 1
 
 
+class _StartRootRecorder:
+    def __init__(self) -> None:
+        self.scheduled: list[tuple[int, object]] = []
+
+    def after(self, delay: int, callback: object) -> str:
+        self.scheduled.append((delay, callback))
+        return f"after-{len(self.scheduled)}"
+
+
+class _ReadyTray:
+    last_error = None
+
+    @staticmethod
+    def start() -> bool:
+        return True
+
+    @staticmethod
+    def wait_until_ready(*, timeout: float) -> bool:
+        return timeout > 0
+
+
+class _StartHarness:
+    def __init__(self, *, check_updates: bool, smoke_test: bool = False) -> None:
+        self.config = LauncherConfig.default()
+        self.config.check_updates = check_updates
+        self.smoke_test = smoke_test
+        self.root = _StartRootRecorder()
+        self.tray = _ReadyTray()
+        self.toast = _ToastRecorder()
+        self.load_result = SimpleNamespace(
+            recovered=False,
+            repaired=False,
+            created=False,
+            backup_path=None,
+        )
+        self.startup_sync_calls = 0
+        self.update_check_calls = 0
+
+    def _synchronize_startup_registration(self) -> None:
+        self.startup_sync_calls += 1
+
+    @staticmethod
+    def _configure_hotkeys(
+        _panel: str, _quick_add: str, *, show_error: bool
+    ) -> bool:
+        return show_error
+
+    @staticmethod
+    def _drain_commands() -> None:
+        pass
+
+    @staticmethod
+    def _validate_all_paths() -> None:
+        pass
+
+    @staticmethod
+    def _request_all_icons() -> None:
+        pass
+
+    @staticmethod
+    def _prewarm_popup() -> None:
+        pass
+
+    def _check_for_update(self) -> None:
+        self.update_check_calls += 1
+
+
+def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
+    for _delay, callback in harness.root.scheduled:
+        if getattr(callback, "__name__", "") == callback_name:
+            callback()  # type: ignore[operator]
+            return True
+    return False
+
+
 class ControllerResponsivenessTests(unittest.TestCase):
+    def test_start_always_reconciles_startup_without_network_opt_in(self) -> None:
+        harness = _StartHarness(check_updates=False)
+
+        QuickAccessApp.start(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(1, harness.startup_sync_calls)
+        self.assertFalse(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertEqual(0, harness.update_check_calls)
+
+    def test_start_schedules_update_check_only_after_explicit_opt_in(self) -> None:
+        harness = _StartHarness(check_updates=True)
+
+        QuickAccessApp.start(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(1, harness.startup_sync_calls)
+        self.assertTrue(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertEqual(1, harness.update_check_calls)
+
+    def test_smoke_start_changes_neither_startup_registry_nor_network(self) -> None:
+        harness = _StartHarness(check_updates=True, smoke_test=True)
+
+        QuickAccessApp.start(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(0, harness.startup_sync_calls)
+        self.assertFalse(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertEqual(0, harness.update_check_calls)
+
     def test_update_checks_require_explicit_opt_in(self) -> None:
         harness = _UpdateCheckHarness()
         self.assertFalse(harness.config.check_updates)

@@ -137,7 +137,10 @@ class QuickAccessApp:
     def start(self) -> None:
         """Start integrations, validation and the Tk-side command pump."""
 
-        if not self.smoke_test and self.config.check_updates:
+        # Reconcile the persisted preference with HKCU Run on every normal
+        # launch.  This also repairs the command after the EXE is moved or
+        # renamed, independently of the opt-in network update setting.
+        if not self.smoke_test:
             self._synchronize_startup_registration()
 
         hotkey_ready = self._configure_hotkeys(
@@ -163,7 +166,7 @@ class QuickAccessApp:
         self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
         self._validate_all_paths()
         self._request_all_icons()
-        if not self.smoke_test:
+        if not self.smoke_test and self.config.check_updates:
             # Delayed well past startup so a slow or firewalled network call
             # never competes with hotkey/tray registration for attention.
             self.root.after(5000, self._check_for_update)
