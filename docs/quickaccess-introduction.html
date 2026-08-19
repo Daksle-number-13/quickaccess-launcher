@@ -47,7 +47,7 @@
       overflow-wrap: anywhere;
     }
 
-    img { display: block; max-width: 100%; }
+    img { display: block; max-width: 100%; height: auto; }
     figure { margin: 0; }
     a { color: inherit; }
     button, a { -webkit-tap-highlight-color: transparent; }
@@ -395,11 +395,470 @@
       font-weight: 900;
     }
 
-    .showcase-grid { display: grid; grid-template-columns: 0.82fr 1.18fr; gap: 24px; align-items: start; }
-    .shot-card { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: var(--shadow-sm); }
-    .shot-card img { width: 100%; background: #fff; }
+    .showcase-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+    .shot-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: var(--shadow-sm); }
+    .shot-card img { width: 100%; height: auto; aspect-ratio: auto; object-fit: contain; background: #fff; }
+    .shot-media {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background: #f3f7fc;
+    }
+    .shot-media img { width: 100%; height: 100%; object-fit: contain; object-position: center; background: transparent; }
+    .shot-media:hover img, .shot-media:focus-visible img { transform: scale(1.012); }
+    .shot-media img { transition: transform 160ms ease; }
     .shot-copy { padding: 20px 22px 23px; }
     .shot-copy p { margin-bottom: 0; color: var(--ink-700); font-size: 14px; }
+
+    .motion-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .motion-card {
+      overflow: hidden;
+      border-radius: 22px;
+      background: #fff;
+    }
+
+    .motion-copy { padding: 27px 28px 22px; }
+    .motion-copy .demo-label {
+      display: inline-flex;
+      margin-bottom: 12px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      background: var(--blue-100);
+      color: var(--blue-700);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .motion-copy h3 { margin-bottom: 7px; }
+    .motion-copy p { margin-bottom: 0; color: var(--ink-700); font-size: 14px; }
+
+    .motion-stage {
+      position: relative;
+      isolation: isolate;
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      margin: 0 14px;
+      border: 1px solid #cdd9e9;
+      border-radius: 16px;
+      background: #eaf1fb;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.62);
+    }
+
+    .motion-stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background:
+        radial-gradient(circle at 82% 18%, rgba(39, 121, 239, 0.24), transparent 25%),
+        linear-gradient(145deg, #e5f0ff 0%, #f8fbff 48%, #dce9f8 100%);
+    }
+
+    .demo-desktop-icon {
+      position: absolute;
+      top: 9%;
+      left: 5%;
+      width: 54px;
+      display: grid;
+      justify-items: center;
+      gap: 4px;
+      color: #1f3d65;
+      font-size: 9px;
+      text-align: center;
+    }
+    .demo-desktop-icon::before {
+      content: "";
+      width: 27px;
+      height: 22px;
+      border-radius: 4px 4px 3px 3px;
+      background: #f2c94c;
+      box-shadow: inset 0 0 0 1px rgba(120, 86, 0, 0.2), 0 3px 7px rgba(34, 70, 120, 0.14);
+    }
+    .demo-desktop-icon::after {
+      content: "";
+      position: absolute;
+      top: -3px;
+      left: 14px;
+      width: 15px;
+      height: 6px;
+      border-radius: 3px 3px 0 0;
+      background: #dba919;
+    }
+
+    .demo-taskbar {
+      position: absolute;
+      inset: auto 0 0;
+      height: 9%;
+      border-top: 1px solid rgba(138, 159, 188, 0.48);
+      background: rgba(249, 251, 255, 0.91);
+      backdrop-filter: blur(8px);
+    }
+    .demo-taskbar::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: var(--blue-600);
+      box-shadow: 28px 0 0 #d7e2f1, -28px 0 0 #d7e2f1;
+      transform: translate(-50%, -50%);
+    }
+
+    .key-combo {
+      position: absolute;
+      top: 7%;
+      left: 50%;
+      z-index: 8;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 11px;
+      border: 1px solid #c8d6e8;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: 0 10px 24px rgba(26, 60, 106, 0.18);
+      opacity: 0;
+      transform: translate(-50%, -9px) scale(0.96);
+    }
+    .key-combo kbd {
+      min-width: 34px;
+      padding: 5px 8px;
+      border: 1px solid #b8c7da;
+      border-bottom-width: 3px;
+      border-radius: 7px;
+      background: #f7f9fc;
+      color: var(--ink-900);
+      font: 800 11px/1.2 "Segoe UI", sans-serif;
+      text-align: center;
+    }
+    .key-combo b { color: var(--ink-500); font-size: 11px; }
+
+    .demo-popup {
+      position: absolute;
+      top: 25%;
+      left: 6%;
+      z-index: 3;
+      width: 88%;
+      height: auto;
+      border: 1px solid #c6d5e8;
+      border-radius: 13px;
+      background: #fff;
+      box-shadow: 0 17px 40px rgba(25, 55, 99, 0.23);
+      opacity: 0;
+      transform: translateY(13px) scale(0.96);
+      transform-origin: center top;
+    }
+
+    .demo-pointer {
+      position: absolute;
+      z-index: 10;
+      width: 17px;
+      height: 25px;
+      background: #fff;
+      clip-path: polygon(0 0, 0 100%, 29% 72%, 46% 100%, 61% 92%, 45% 65%, 83% 64%);
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.82));
+      opacity: 0;
+    }
+
+    .click-pulse {
+      position: absolute;
+      z-index: 9;
+      width: 30px;
+      height: 30px;
+      border: 3px solid var(--blue-500);
+      border-radius: 50%;
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.35);
+    }
+    .click-open { left: 31%; top: 51%; }
+
+    .folder-result {
+      position: absolute;
+      inset: 8% 7% 12%;
+      z-index: 7;
+      overflow: hidden;
+      border: 1px solid #b9c8dc;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 20px 45px rgba(25, 55, 99, 0.23);
+      opacity: 0;
+      transform: translateY(12px) scale(0.97);
+    }
+    .folder-titlebar {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      height: 22%;
+      padding: 0 14px;
+      border-bottom: 1px solid #d9e2ee;
+      background: #f8fafc;
+      font-size: 12px;
+    }
+    .folder-glyph {
+      position: relative;
+      width: 22px;
+      height: 16px;
+      border-radius: 3px;
+      background: #f0bf31;
+      box-shadow: inset 0 0 0 1px rgba(125, 87, 0, 0.18);
+    }
+    .folder-glyph::before {
+      content: "";
+      position: absolute;
+      top: -4px;
+      left: 2px;
+      width: 10px;
+      height: 5px;
+      border-radius: 3px 3px 0 0;
+      background: #d9a514;
+    }
+    .folder-body { padding: 12px 14px; }
+    .folder-address {
+      margin-bottom: 12px;
+      padding: 6px 9px;
+      border: 1px solid #d6dfeb;
+      border-radius: 6px;
+      color: var(--ink-500);
+      font-size: 9px;
+    }
+    .folder-files { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .folder-file {
+      display: grid;
+      justify-items: center;
+      gap: 4px;
+      color: var(--ink-700);
+      font-size: 8px;
+      text-align: center;
+    }
+    .folder-file::before {
+      content: "";
+      width: 25px;
+      height: 31px;
+      border: 1px solid #94b7e9;
+      border-radius: 3px;
+      background: linear-gradient(135deg, #fff 0 72%, #d9e9ff 73%);
+    }
+
+    .explorer-window {
+      position: absolute;
+      inset: 6% 5% 12%;
+      overflow: hidden;
+      border: 1px solid #bccbde;
+      border-radius: 11px;
+      background: #fff;
+      box-shadow: 0 15px 35px rgba(30, 61, 104, 0.18);
+    }
+    .explorer-top {
+      height: 22%;
+      padding: 8px 12px;
+      border-bottom: 1px solid #dce4ef;
+      background: #f7f9fc;
+    }
+    .explorer-title { margin-bottom: 6px; font-size: 10px; font-weight: 800; }
+    .explorer-address { padding: 4px 8px; border: 1px solid #d4deeb; border-radius: 5px; background: #fff; color: var(--ink-500); font-size: 8px; }
+    .explorer-list { padding: 9px 11px; }
+    .explorer-row {
+      display: grid;
+      grid-template-columns: 1.5fr 0.8fr 0.55fr;
+      align-items: center;
+      min-height: 29px;
+      padding: 0 8px;
+      border-radius: 5px;
+      color: var(--ink-700);
+      font-size: 8px;
+    }
+    .explorer-row.header { min-height: 23px; color: var(--ink-500); font-weight: 700; }
+    .explorer-row.selected { border: 1px solid #78a9ee; background: #dcecff; color: #183c70; font-weight: 800; }
+    .file-name { display: flex; align-items: center; gap: 6px; }
+    .file-name::before { content: ""; width: 12px; height: 15px; border: 1px solid #4b8de8; border-radius: 2px; background: #fff; }
+
+    .name-dialog {
+      position: absolute;
+      top: 28%;
+      left: 50%;
+      z-index: 7;
+      width: 64%;
+      padding: 15px;
+      border: 1px solid #bdcadc;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 18px 40px rgba(22, 52, 94, 0.25);
+      opacity: 0;
+      transform: translate(-50%, 12px) scale(0.96);
+    }
+    .name-dialog strong { display: block; margin-bottom: 10px; font-size: 11px; }
+    .dialog-label { margin-bottom: 4px; color: var(--ink-500); font-size: 8px; }
+    .dialog-help { margin-bottom: 8px; color: #8090a6; font-size: 7px; }
+    .dialog-input { margin-bottom: 11px; padding: 7px 8px; border: 1px solid #b8c9df; border-radius: 6px; background: #f9fbfe; color: var(--ink-900); font-size: 9px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 6px; }
+    .dialog-button { padding: 5px 10px; border-radius: 6px; background: #eef3f9; color: var(--ink-700); font-size: 8px; font-weight: 800; }
+    .dialog-button.primary { background: var(--blue-600); color: #fff; }
+
+    .click-register { left: 85%; top: 82%; }
+
+    .registered-result {
+      position: absolute;
+      inset: auto 4% 13% auto;
+      z-index: 9;
+      width: min(78%, 360px);
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      align-items: center;
+      column-gap: 9px;
+      min-height: 64px;
+      padding: 10px 13px;
+      border: 1px solid #bad2f2;
+      border-left: 4px solid var(--green);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 13px 32px rgba(24, 62, 113, 0.22);
+      opacity: 0;
+      transform: translateY(12px) scale(0.96);
+      text-align: left;
+    }
+    .toast-symbol {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      border-radius: 50%;
+      background: #e8f5ed;
+      color: var(--green);
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .toast-message { color: var(--ink-700); font-size: 9px; font-weight: 700; line-height: 1.45; }
+
+    .motion-steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 19px 14px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: motion-step;
+    }
+    .motion-steps li {
+      min-height: 58px;
+      padding: 10px 10px 10px 35px;
+      border-radius: 10px;
+      background: var(--blue-050);
+      color: var(--ink-700);
+      font-size: 11px;
+      line-height: 1.45;
+      counter-increment: motion-step;
+      position: relative;
+    }
+    .motion-steps li::before {
+      content: counter(motion-step);
+      position: absolute;
+      top: 10px;
+      left: 9px;
+      width: 19px;
+      height: 19px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue-600);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    .motion-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 14px 20px;
+    }
+    .motion-controls span { color: var(--ink-500); font-size: 11px; }
+    .motion-control-buttons { display: flex; gap: 7px; }
+    .replay-button, .pause-button {
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid #b7cae4;
+      border-radius: 9px;
+      background: #fff;
+      color: var(--blue-700);
+      font: 800 12px/1 "Malgun Gothic", "Segoe UI", sans-serif;
+      cursor: pointer;
+    }
+    .replay-button:hover, .replay-button:focus-visible,
+    .pause-button:hover, .pause-button:focus-visible { background: var(--blue-050); border-color: #7da8e3; }
+    .motion-demo.is-paused .pause-button { border-color: var(--blue-600); background: var(--blue-100); }
+    .motion-demo.is-paused * { animation-play-state: paused !important; }
+    .motion-demo.is-offscreen * { animation-play-state: paused !important; }
+    .pause-button:disabled { cursor: default; opacity: 0.58; }
+
+    .motion-demo.is-playing .key-open { animation: key-open 9s ease both; }
+    .motion-demo.is-playing .demo-popup { animation: popup-open 9s ease both; }
+    .motion-demo.is-playing .pointer-open { animation: pointer-open 9s ease both; }
+    .motion-demo.is-playing .click-open { animation: click-open 9s ease both; }
+    .motion-demo.is-playing .folder-result { animation: folder-open 9s ease both; }
+    .motion-demo.is-playing .key-register { animation: key-register 10s ease both; }
+    .motion-demo.is-playing .name-dialog { animation: dialog-register 10s ease both; }
+    .motion-demo.is-playing .pointer-register { animation: pointer-register 10s ease both; }
+    .motion-demo.is-playing .click-register { animation: click-register 10s ease both; }
+    .motion-demo.is-playing .registered-result { animation: registered-result 10s ease both; }
+
+    @keyframes key-open {
+      0%, 4%, 23%, 100% { opacity: 0; transform: translate(-50%, -9px) scale(0.96); }
+      8%, 19% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+    @keyframes popup-open {
+      0%, 18% { opacity: 0; transform: translateY(13px) scale(0.96); }
+      25%, 56% { opacity: 1; transform: translateY(0) scale(1); }
+      61%, 100% { opacity: 0; transform: translateY(-4px) scale(0.99); }
+    }
+    @keyframes pointer-open {
+      0%, 34% { left: 78%; top: 77%; opacity: 0; }
+      40% { left: 78%; top: 77%; opacity: 1; }
+      56%, 63% { left: 31%; top: 51%; opacity: 1; }
+      68%, 100% { left: 31%; top: 51%; opacity: 0; }
+    }
+    @keyframes click-open {
+      0%, 53% { opacity: 0; transform: translate(-50%, -50%) scale(0.35); }
+      57% { opacity: 0.9; }
+      63%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.55); }
+    }
+    @keyframes folder-open {
+      0%, 59% { opacity: 0; transform: translateY(12px) scale(0.97); }
+      66%, 100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes key-register {
+      0%, 4%, 22%, 100% { opacity: 0; transform: translate(-50%, -9px) scale(0.96); }
+      8%, 18% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+    @keyframes dialog-register {
+      0%, 23% { opacity: 0; transform: translate(-50%, 12px) scale(0.96); }
+      31%, 56% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+      62%, 100% { opacity: 0; transform: translate(-50%, -5px) scale(0.99); }
+    }
+    @keyframes pointer-register {
+      0%, 35% { left: 92%; top: 38%; opacity: 0; }
+      42% { left: 92%; top: 38%; opacity: 1; }
+      54%, 60% { left: 85%; top: 82%; opacity: 1; }
+      65%, 100% { left: 85%; top: 82%; opacity: 0; }
+    }
+    @keyframes click-register {
+      0%, 53% { opacity: 0; transform: translate(-50%, -50%) scale(0.35); }
+      57% { opacity: 0.9; }
+      63%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.55); }
+    }
+    @keyframes registered-result {
+      0%, 61%, 100% { opacity: 0; transform: translateY(12px) scale(0.96); }
+      68%, 96% { opacity: 1; transform: translateY(0) scale(1); }
+    }
 
     .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
     .balance-card { padding: 30px; }
@@ -489,7 +948,7 @@
     @media (max-width: 980px) {
       .nav-links a:not(.nav-cta) { display: none; }
       .hero { padding-top: 70px; }
-      .hero-grid, .showcase-grid, .security-panel { grid-template-columns: 1fr; }
+      .hero-grid, .showcase-grid, .security-panel, .motion-grid { grid-template-columns: 1fr; }
       .hero-visual { padding-left: 0; }
       .floating-card { right: 10px; }
       .trust-grid, .steps-grid { grid-template-columns: 1fr 1fr; }
@@ -498,6 +957,7 @@
       .pain-grid, .feature-grid { grid-template-columns: 1fr 1fr; }
       .flow { grid-template-columns: 1fr 1fr; }
       .flow-step:nth-child(2)::after { display: none; }
+      .motion-grid { max-width: 760px; margin-inline: auto; }
     }
 
     @media (max-width: 700px) {
@@ -521,26 +981,42 @@
       .compare-wrap { overflow-x: auto; }
       .compare-table { min-width: 680px; }
       .security-panel, .cta-panel { padding: 28px 22px; }
+      .motion-copy { padding: 23px 20px 18px; }
+      .motion-stage { margin-inline: 10px; }
+      .motion-controls { align-items: flex-start; flex-direction: column; padding-inline: 10px; }
       .cta-panel { grid-template-columns: 1fr; }
       .cta-panel .button { width: 100%; }
       .footer-grid { align-items: flex-start; flex-direction: column; }
     }
 
+    @media (max-width: 500px) {
+      .motion-stage { aspect-ratio: 4 / 3; }
+      .motion-steps { grid-template-columns: 1fr; }
+      .motion-steps li { min-height: 0; }
+      .key-combo { gap: 4px; padding-inline: 8px; }
+      .key-combo kbd { min-width: 29px; padding-inline: 6px; font-size: 9px; }
+      .folder-files { gap: 5px; }
+      .name-dialog { top: 18%; width: 76%; padding: 12px; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       *, *::before, *::after { transition-duration: 0.01ms !important; }
+      .motion-demo *, .motion-demo *::before, .motion-demo *::after { animation: none !important; transition: none !important; }
+      .motion-stage, .motion-controls { display: none; }
     }
 
     @media print {
       @page { size: A4; margin: 14mm; }
       body { color: #111; background: #fff; font-size: 10pt; }
-      .topbar, .hero-actions, .cta-section { display: none !important; }
+      .topbar, .hero-actions, .cta-section, .motion-stage, .motion-controls { display: none !important; }
       .hero, section { padding: 24px 0; background: #fff !important; }
       .hero-grid, .showcase-grid, .security-panel { grid-template-columns: 1fr; }
       .hero-visual { max-width: 680px; padding: 0; }
-      .window-frame, .card, .compare-wrap, .shot-card, .trust-grid { box-shadow: none; break-inside: avoid; }
+      .window-frame, .card, .compare-wrap, .shot-card, .trust-grid, .motion-card { box-shadow: none; break-inside: avoid; }
       .trust-strip { margin-top: 0; }
       .feature-grid, .pain-grid, .steps-grid { grid-template-columns: 1fr 1fr; }
+      .motion-grid { grid-template-columns: 1fr; }
       .floating-card { display: none; }
       a { text-decoration: none; }
     }
@@ -558,6 +1034,7 @@
       <nav class="nav-links" aria-label="페이지 메뉴">
         <a href="#comparison">도입 전후</a>
         <a href="#features">주요 기능</a>
+        <a href="#motion-demos">동작 예시</a>
         <a href="#pros-cons">장단점</a>
         <a class="nav-cta" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v1.2.2" target="_blank" rel="noopener noreferrer">다운로드</a>
       </nav>
@@ -686,13 +1163,123 @@
         </div>
         <div class="showcase-grid">
           <figure class="shot-card">
-            <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
-            <figcaption class="shot-copy"><h3>빠른 실행 패널</h3><p>예시 화면의 샘플 경로입니다. 카드 이름과 유형을 확인하고, 마우스 또는 키보드로 원하는 항목을 실행합니다.</p></figcaption>
+            <a class="shot-media" href="screenshots/quickaccess-popup-light.png" target="_blank" rel="noopener noreferrer" aria-label="빠른 실행 패널 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
+            </a>
+            <figcaption class="shot-copy"><h3>빠른 실행 패널</h3><p>예시 화면의 샘플 경로입니다. 카드 이름과 유형을 확인하고, 마우스 또는 키보드로 원하는 항목을 실행합니다. 이미지를 누르면 원본 크기로 볼 수 있습니다.</p></figcaption>
           </figure>
           <figure class="shot-card">
-            <img src="screenshots/quickaccess-settings-light.png" width="2026" height="1471" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
-            <figcaption class="shot-copy"><h3>환경 설정</h3><p>예시 화면의 샘플 경로입니다. 바로가기 목록, 화면 스타일, 패널 열 수, 단축키와 Windows 자동 실행을 한곳에서 관리합니다.</p></figcaption>
+            <a class="shot-media" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-light.png" width="2026" height="1471" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
+            </a>
+            <figcaption class="shot-copy"><h3>환경 설정</h3><p>예시 화면의 샘플 경로입니다. 바로가기 목록, 화면 스타일, 패널 열 수, 단축키와 Windows 자동 실행을 한곳에서 관리합니다. 이미지를 누르면 원본 크기로 볼 수 있습니다.</p></figcaption>
           </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="motion-demos" aria-labelledby="motion-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">How It Works</div>
+          <h2 id="motion-title">단축키부터 실행까지<br>순서대로 확인하세요</h2>
+          <p>실제 QuickAccess의 흐름을 재현한 자동 재생 예시입니다. 각 장면은 일시정지하거나 처음부터 다시 볼 수 있습니다.</p>
+        </div>
+
+        <div class="motion-grid">
+          <article class="card motion-card motion-demo" id="demo-open" data-demo data-demo-name="빠른 실행 동작">
+            <div class="motion-copy">
+              <span class="demo-label">빠른 실행</span>
+              <h3>Ctrl + Space로 패널 열기</h3>
+              <p>현재 작업 화면을 벗어나지 않고 패널을 호출한 뒤 원하는 항목을 실행합니다.</p>
+            </div>
+
+            <div class="motion-stage" aria-hidden="true">
+              <div class="demo-desktop-icon">품질 문서</div>
+              <div class="demo-taskbar"></div>
+              <div class="key-combo key-open"><kbd>Ctrl</kbd><b>+</b><kbd>Space</kbd></div>
+              <img class="demo-popup" src="screenshots/quickaccess-popup-light.png" width="896" height="440" alt="">
+              <span class="demo-pointer pointer-open"></span>
+              <span class="click-pulse click-open"></span>
+
+              <div class="folder-result">
+                <div class="folder-titlebar"><span class="folder-glyph"></span><strong>품질 문서 - 파일 탐색기</strong></div>
+                <div class="folder-body">
+                  <div class="folder-address">문서 &gt; 품질 문서</div>
+                  <div class="folder-files">
+                    <span class="folder-file">검사 기준서.pdf</span>
+                    <span class="folder-file">품질 회의록.docx</span>
+                    <span class="folder-file">주간 현황.xlsx</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <ol class="motion-steps" aria-label="빠른 실행 동작 순서">
+              <li>Ctrl + Space 입력</li>
+              <li>QuickAccess 패널에서 카드 선택</li>
+              <li>대상 파일·폴더·링크 실행</li>
+            </ol>
+            <div class="motion-controls">
+              <span>화면에 보이면 1회 자동 재생</span>
+              <div class="motion-control-buttons">
+                <button class="replay-button" type="button" data-replay aria-label="빠른 실행 동작 다시 보기">다시 보기</button>
+                <button class="pause-button" type="button" data-pause aria-pressed="false" aria-label="빠른 실행 동작 일시정지">일시정지</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card motion-card motion-demo" id="demo-register" data-demo data-demo-name="탐색기 빠른 등록 동작">
+            <div class="motion-copy">
+              <span class="demo-label">탐색기 빠른 등록</span>
+              <h3>Ctrl + Shift + Space로 추가</h3>
+              <p>파일 탐색기에서 항목을 선택하고 표시 이름만 확인하면 빠른 실행 목록에 등록됩니다.</p>
+            </div>
+
+            <div class="motion-stage" aria-hidden="true">
+              <div class="explorer-window">
+                <div class="explorer-top">
+                  <div class="explorer-title">파일 탐색기</div>
+                  <div class="explorer-address">문서 &gt; 품질 자료</div>
+                </div>
+                <div class="explorer-list">
+                  <div class="explorer-row header"><span>이름</span><span>수정한 날짜</span><span>유형</span></div>
+                  <div class="explorer-row"><span class="file-name">검사 기준서.pdf</span><span>오늘</span><span>PDF</span></div>
+                  <div class="explorer-row selected"><span class="file-name">불량 집계.xlsx</span><span>오늘</span><span>Excel</span></div>
+                  <div class="explorer-row"><span class="file-name">주간 회의록.docx</span><span>어제</span><span>Word</span></div>
+                </div>
+              </div>
+
+              <div class="key-combo key-register"><kbd>Ctrl</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>Space</kbd></div>
+              <div class="name-dialog">
+                <strong>빠른 등록</strong>
+                <div class="dialog-label">런처에 표시할 이름을 입력하세요.</div>
+                <div class="dialog-help">설정에서 언제든 다시 변경할 수 있습니다.</div>
+                <div class="dialog-input">불량 집계.xlsx</div>
+                <div class="dialog-actions"><span class="dialog-button">취소</span><span class="dialog-button primary">확인</span></div>
+                <span class="demo-pointer pointer-register"></span>
+                <span class="click-pulse click-register"></span>
+              </div>
+
+              <div class="registered-result">
+                <span class="toast-symbol">✓</span>
+                <span class="toast-message">현재 탐색기 항목을 등록했습니다.</span>
+              </div>
+            </div>
+
+            <ol class="motion-steps" aria-label="탐색기 빠른 등록 동작 순서">
+              <li>탐색기에서 파일·폴더 선택</li>
+              <li>Ctrl + Shift + Space 후 이름 확인</li>
+              <li>빠른 실행 항목 등록 완료</li>
+            </ol>
+            <div class="motion-controls">
+              <span>화면에 보이면 1회 자동 재생</span>
+              <div class="motion-control-buttons">
+                <button class="replay-button" type="button" data-replay aria-label="탐색기 빠른 등록 동작 다시 보기">다시 보기</button>
+                <button class="pause-button" type="button" data-pause aria-pressed="false" aria-label="탐색기 빠른 등록 동작 일시정지">일시정지</button>
+              </div>
+            </div>
+          </article>
         </div>
       </div>
     </section>
@@ -812,5 +1399,108 @@
       </div>
     </div>
   </footer>
+
+  <script>
+    (() => {
+      const demos = Array.from(document.querySelectorAll("[data-demo]"));
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      let observer = null;
+
+      const setPauseLabel = (demo, paused) => {
+        const button = demo.querySelector("[data-pause]");
+        if (!button) return;
+        const name = demo.dataset.demoName || "동작 예시";
+        button.setAttribute("aria-pressed", String(paused));
+        button.setAttribute("aria-label", `${name} ${paused ? "계속 보기" : "일시정지"}`);
+        button.textContent = paused ? "계속 보기" : "일시정지";
+      };
+
+      const setCompleteLabel = (demo) => {
+        const button = demo.querySelector("[data-pause]");
+        if (!button) return;
+        const name = demo.dataset.demoName || "동작 예시";
+        button.disabled = true;
+        button.setAttribute("aria-pressed", "false");
+        button.setAttribute("aria-label", `${name} 재생 완료`);
+        button.textContent = "재생 완료";
+      };
+
+      const replay = (demo) => {
+        const pauseButton = demo.querySelector("[data-pause]");
+        if (pauseButton) pauseButton.disabled = false;
+        demo.classList.remove("is-playing", "is-paused", "is-complete");
+        setPauseLabel(demo, false);
+        void demo.offsetWidth;
+        demo.classList.add("is-playing");
+      };
+
+      demos.forEach((demo) => {
+        demo.querySelector("[data-replay]")?.addEventListener("click", () => replay(demo));
+        demo.querySelector("[data-pause]")?.addEventListener("click", () => {
+          if (demo.querySelector("[data-pause]")?.disabled) return;
+          const paused = demo.classList.toggle("is-paused");
+          setPauseLabel(demo, paused);
+        });
+
+        const terminalLayer = demo.querySelector(".folder-result, .registered-result");
+        terminalLayer?.addEventListener("animationend", (event) => {
+          if (event.target !== terminalLayer) return;
+          demo.classList.remove("is-paused");
+          demo.classList.add("is-complete");
+          setCompleteLabel(demo);
+        });
+      });
+
+      const stopObserving = () => {
+        observer?.disconnect();
+        observer = null;
+        demos.forEach((demo) => {
+          demo.classList.remove("is-playing", "is-paused", "is-offscreen", "is-complete");
+          delete demo.dataset.played;
+          const pauseButton = demo.querySelector("[data-pause]");
+          if (pauseButton) pauseButton.disabled = false;
+          setPauseLabel(demo, false);
+        });
+      };
+
+      const startObserving = () => {
+        if (reduceMotion.matches) return;
+        if (!("IntersectionObserver" in window)) {
+          demos.forEach(replay);
+          return;
+        }
+
+        observer?.disconnect();
+        observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            const demo = entry.target;
+            if (entry.isIntersecting) {
+              demo.classList.remove("is-offscreen");
+              if (demo.dataset.played !== "true") {
+                demo.dataset.played = "true";
+                replay(demo);
+              }
+            } else {
+              demo.classList.add("is-offscreen");
+            }
+          });
+        }, { threshold: 0.35 });
+
+        demos.forEach((demo) => observer.observe(demo));
+      };
+
+      const handleMotionPreference = () => {
+        stopObserving();
+        if (!reduceMotion.matches) startObserving();
+      };
+
+      if (typeof reduceMotion.addEventListener === "function") {
+        reduceMotion.addEventListener("change", handleMotionPreference);
+      } else {
+        reduceMotion.addListener(handleMotionPreference);
+      }
+      startObserving();
+    })();
+  </script>
 </body>
 </html>
