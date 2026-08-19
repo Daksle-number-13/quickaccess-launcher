@@ -2,7 +2,7 @@
 
 ## 자동 검증
 
-- [x] `python -m pytest -q -p no:cacheprovider` — 78개 + 서브테스트 8개 통과
+- [x] `python -m pytest -q -p no:cacheprovider` — 115개 통과
 - [x] `python -m compileall -q main.py quickaccess tests`
 - [x] `python -m pip check`
 - [x] Python 3.13.15 격리 환경에 의존성 재설치
@@ -11,15 +11,10 @@
 - [x] `dist\QuickAccess.exe --smoke-test` 종료 코드 0
 - [x] PyInstaller 경고 검토 — 앱 필수 모듈 누락 없음
 
-검증 빌드: `1.0.0.0`, 13,996,185 bytes,
-SHA-256 `838692396CED4061E55782E21F3C7F1DDF77D882958087A60394D858EF343E62`.
+검증 빌드: `1.2.2.0`, 14,190,342 bytes,
+SHA-256 `F15880FA37A4DBD3060188E57CA15C8C4E58983B1D9F26EA004A93085D0AE573`.
 현재 Authenticode 상태는 `NotSigned`이며, 서명 후에는 해시와 스모크 테스트를
 서명된 파일 기준으로 다시 확인해야 합니다.
-
-> 실행취소·업데이트 확인·바로가기(.lnk) 해석·방향키 이동·경로 복사·롤링
-> 백업 기능이 추가되면서 자동 테스트가 늘었습니다. 위 빌드 수치는 그 이전에
-> 기록된 값이므로, 다음 서명 빌드 전에 테스트 스위트와 스모크 테스트를 다시
-> 실행하고 이 섹션의 수치를 갱신하세요.
 
 ## 깨끗한 PC 검증
 
@@ -39,7 +34,8 @@ SHA-256 `838692396CED4061E55782E21F3C7F1DDF77D882958087A60394D858EF343E62`.
 - [ ] 설정에서 유효/중복/이미 점유된 핫키 변경 및 롤백 확인
 - [ ] `Ctrl+Space` 등 알려진 충돌 조합 입력 시 설정 화면에 경고 문구 표시
 - [ ] 회사 EDR/백신에 의한 격리 여부 확인
-- [ ] 회사 인증서로 Authenticode 서명 및 타임스탬프 적용
+- [ ] 인증서를 사용하는 경우 Authenticode 서명·타임스탬프 적용 후 재검증
+- [x] 미서명 공개 릴리스에 `NotSigned` 안내와 SHA-256 값 명시
 
 ## GUI·경로
 

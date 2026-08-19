@@ -273,7 +273,7 @@ def draw_page(canvas, document) -> None:  # type: ignore[no-untyped-def]
         canvas.line(MARGIN_X, 12 * mm, PAGE_WIDTH - MARGIN_X, 12 * mm)
         canvas.setFont("Malgun", 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v1.2.0")
+        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v1.2.2")
         canvas.drawRightString(PAGE_WIDTH - MARGIN_X, 7.5 * mm, str(page))
     canvas.restoreState()
 
@@ -296,7 +296,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 4 * mm),
             note("5분이면 시작할 수 있어요", "설치 없이 실행하고, 원하는 항목을 등록한 뒤 Ctrl + Space만 누르면 됩니다.", tone="green"),
             Spacer(1, 9 * mm),
-            Paragraph("버전 1.2.0  |  Windows 10/11 x64  |  2026-08-13", SMALL),
+            Paragraph("버전 1.2.2  |  Windows 10/11 x64  |  2026-08-19", SMALL),
             PageBreak(),
         ]
     )
@@ -311,7 +311,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 3 * mm),
             step(3, "패널 열기", "키보드에서 Ctrl + Space를 함께 누릅니다. 마우스 커서가 있는 화면에 패널이 나타납니다."),
             Spacer(1, 6 * mm),
-            note("Windows에서 경고가 표시되나요?", "현재 공개 파일은 SignPath 코드 서명 승인 전이라 Windows가 '인식할 수 없는 앱' 경고를 표시할 수 있습니다. GitHub 공식 Release에서 받은 파일인지 확인한 뒤 '추가 정보' - '실행'을 선택하세요.", tone="amber"),
+            note("Windows에서 경고가 표시되나요?", "현재 공개 파일에는 Authenticode 코드 서명이 적용되지 않아 Windows가 '인식할 수 없는 앱' 경고를 표시할 수 있습니다. GitHub 공식 Release에서 받은 파일인지 확인하고 Release 안내의 SHA-256 값과 파일 해시를 비교한 뒤 '추가 정보' - '실행'을 선택하세요.", tone="amber"),
             Spacer(1, 5 * mm),
             Paragraph("기본으로 등록되는 항목", H2),
             Paragraph("- 다운로드 폴더<br/>- 문서 폴더", BODY),
@@ -495,7 +495,7 @@ def build() -> None:
         bottomMargin=MARGIN_BOTTOM,
         title="QuickAccess 쉬운 사용 설명서",
         author="Daksle",
-        subject="QuickAccess v1.2.0 Korean user manual",
+        subject="QuickAccess v1.2.2 Korean user manual",
         creator="QuickAccess project",
     )
     document.addPageTemplates(PageTemplate(id="manual", frames=[frame], onPage=draw_page))

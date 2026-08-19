@@ -13,22 +13,27 @@
 [QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
 따라 하면 됩니다.
 
-릴리스 바이너리의 Authenticode 서명은
-[SignPath Foundation](https://signpath.org/)의 무료 오픈소스 코드 서명 프로그램을
-사용하도록 자동화되어 있습니다. SignPath 승인 전에 게시된 바이너리는
-미서명 상태일 수 있으므로 각 Release의 서명 안내를 확인하세요.
+현재 공개 배포판에는 Authenticode 코드 서명이 적용되지 않았습니다. Windows에서
+`알 수 없는 게시자` 또는 SmartScreen 경고가 표시될 수 있으므로 반드시 이 저장소의
+공식 Release에서 다운로드하고, 각 Release 안내에 적힌 SHA-256 값과 파일 해시를
+비교하세요.
 
-### Code signing policy
+```powershell
+Get-FileHash .\QuickAccess.exe -Algorithm SHA256
+```
 
-- Free code signing provided by [SignPath.io](https://signpath.io/), certificate by
-  [SignPath Foundation](https://signpath.org/).
-- Committer and reviewer: [Daksle](https://github.com/Daksle-number-13)
-- Approver: [Daksle](https://github.com/Daksle-number-13)
-- Signed release artifacts are built from this public repository by GitHub Actions.
-- Privacy: By default, this program does not transfer information to networked systems.
-  If the user explicitly enables automatic update checks, it requests public release
-  metadata from the [GitHub Releases API](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
-  Saved launcher names and paths are never included in that request.
+[SignPath Foundation](https://signpath.org/) 무료 OSS 서명 프로그램은 아직 적용되지
+않았으며, 프로젝트의 공개 사용자·기여·외부 소개가 충분히 쌓인 뒤 재신청할
+예정입니다. 현재 릴리스가 서명된 것처럼 보이게 하는 자동화는 사용하지 않습니다.
+
+### 배포 무결성과 개인정보
+
+- 공개 소스는 GitHub Actions에서 자동 테스트합니다.
+- 공개 EXE의 서명 여부와 SHA-256 값은 각 Release 안내에 명시합니다.
+- 기본 설정에서는 정보를 외부 시스템으로 전송하지 않습니다.
+- 사용자가 `새 버전 자동 확인`을 직접 켠 경우에만
+  [GitHub Releases API](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)에서
+  공개 릴리스 정보만 확인하며, 저장된 바로가기 이름과 경로는 전송하지 않습니다.
 
 ## 동작 화면
 
@@ -172,7 +177,8 @@ SHA-256 기록을 다시 수행해야 합니다.
 - Windows 10/11, 표준 사용자 계정, 한글 Windows 사용자명에서 실행
 - 100/125/150/200% 혼합 DPI 및 음수 좌표 멀티모니터에서 네 모서리 보정
 - 회사 EDR/백신에서 `RegisterHotKey` 및 미서명 PyInstaller EXE 허용 여부
-- 최종 EXE에 회사 Authenticode 인증서로 서명하고 타임스탬프 적용
+- 인증서를 사용하는 경우 최종 EXE에 Authenticode 서명·타임스탬프 적용 후 재검증
+- 미서명 배포라면 Release 안내에 `NotSigned` 상태와 SHA-256 값 명시
 - `Ctrl+Space`와 한/영 전환, IDE 자동완성, 업무 앱 단축키 충돌 여부
 - Windows 11 탐색기 탭, 검색 결과, OneDrive, UNC/네트워크 경로 빠른 등록
 - 부팅 자동 실행, 동시 두 번 실행, 탐색기 재시작, 종료 후 잔류 프로세스
