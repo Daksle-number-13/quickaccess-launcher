@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="QuickAccess Launcher의 주요 기능, 장단점, 도입 전후 업무 흐름과 보안·운영 정보를 소개합니다.">
+  <meta name="theme-color" content="#0b63e5">
+  <title>QuickAccess Launcher | 자주 쓰는 파일·폴더·링크를 한 번에</title>
+  <link rel="icon" type="image/png" href="../assets/quickaccess-mark.png">
+  <style>
+    :root {
+      color-scheme: light;
+      --blue-700: #084fc2;
+      --blue-600: #0b63e5;
+      --blue-500: #2879ef;
+      --blue-100: #e8f1ff;
+      --blue-050: #f4f8ff;
+      --ink-900: #142033;
+      --ink-700: #35445b;
+      --ink-500: #65738a;
+      --line: #d9e2ef;
+      --surface: #ffffff;
+      --canvas: #f5f8fc;
+      --green: #11865b;
+      --green-bg: #eaf8f2;
+      --amber: #a85c00;
+      --amber-bg: #fff5e7;
+      --red: #c43d39;
+      --shadow-sm: 0 10px 28px rgba(31, 67, 112, 0.09);
+      --shadow-lg: 0 24px 70px rgba(24, 67, 125, 0.16);
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --max-width: 1160px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--surface);
+      color: var(--ink-900);
+      font-family: Pretendard, "Noto Sans KR", "Malgun Gothic", "Segoe UI", sans-serif;
+      line-height: 1.65;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+
+    img { display: block; max-width: 100%; }
+    figure { margin: 0; }
+    a { color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    .skip-link {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: var(--ink-900);
+      color: #fff;
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .container {
+      width: min(calc(100% - 40px), var(--max-width));
+      margin-inline: auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(217, 226, 239, 0.78);
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      color: var(--ink-900);
+      font-size: 18px;
+      font-weight: 800;
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+
+    .brand img { width: 34px; height: 34px; border-radius: 9px; }
+
+    .nav-links { display: flex; align-items: center; gap: 22px; }
+    .nav-links a {
+      color: var(--ink-700);
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .nav-links a:hover, .nav-links a:focus-visible { color: var(--blue-600); }
+
+    .nav-cta, .button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 18px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--blue-600);
+      color: #fff !important;
+      font-weight: 800;
+      text-decoration: none;
+      box-shadow: 0 8px 22px rgba(11, 99, 229, 0.22);
+      transition: transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .button:hover, .button:focus-visible, .nav-cta:hover, .nav-cta:focus-visible {
+      background: var(--blue-700);
+      transform: translateY(-1px);
+      box-shadow: 0 12px 28px rgba(11, 99, 229, 0.28);
+    }
+
+    .button.secondary {
+      border-color: var(--line);
+      background: #fff;
+      color: var(--ink-900) !important;
+      box-shadow: none;
+    }
+
+    .button.secondary:hover, .button.secondary:focus-visible {
+      border-color: #9dbce8;
+      background: var(--blue-050);
+    }
+
+    .hero {
+      position: relative;
+      padding: 94px 0 82px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 82% 4%, rgba(40, 121, 239, 0.17), transparent 31%),
+        linear-gradient(180deg, #f8fbff 0%, #ffffff 82%);
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      width: 360px;
+      height: 360px;
+      left: -230px;
+      bottom: 0;
+      border-radius: 50%;
+      background: rgba(11, 99, 229, 0.07);
+      filter: blur(2px);
+    }
+
+    .hero-grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      align-items: center;
+      gap: 64px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 7px 11px;
+      border: 1px solid #bfd4f2;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.75);
+      color: var(--blue-700);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--blue-600);
+      box-shadow: 0 0 0 5px rgba(11, 99, 229, 0.12);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 22px;
+      font-size: clamp(42px, 5.5vw, 68px);
+      line-height: 1.08;
+      letter-spacing: -0.055em;
+    }
+
+    h1 .accent { color: var(--blue-600); }
+
+    .hero-copy > p {
+      max-width: 600px;
+      margin-bottom: 28px;
+      color: var(--ink-700);
+      font-size: clamp(17px, 2vw, 20px);
+    }
+
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 26px; }
+    .hero-note { color: var(--ink-500); font-size: 13px; }
+
+    .hero-visual {
+      position: relative;
+      padding: 24px 0 24px 20px;
+    }
+
+    .window-frame {
+      overflow: hidden;
+      border: 1px solid #cbd8e9;
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: var(--shadow-lg);
+      transform: rotate(0.5deg);
+    }
+
+    .window-bar {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 15px;
+      border-bottom: 1px solid #e7edf5;
+      background: #f7f9fc;
+    }
+
+    .window-dot { width: 9px; height: 9px; border-radius: 50%; background: #c7d2e2; }
+    .window-frame img { width: 100%; height: auto; }
+
+    .floating-card {
+      position: absolute;
+      right: -18px;
+      bottom: 0;
+      padding: 14px 17px;
+      border: 1px solid #d4e1f3;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow-sm);
+      color: var(--ink-700);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .floating-card strong { display: block; color: var(--blue-700); font-size: 16px; }
+
+    .trust-strip {
+      position: relative;
+      z-index: 2;
+      margin-top: -22px;
+    }
+
+    .trust-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .trust-item { padding: 21px 23px; border-right: 1px solid var(--line); }
+    .trust-item:last-child { border-right: 0; }
+    .trust-item strong { display: block; margin-bottom: 2px; font-size: 15px; }
+    .trust-item span { color: var(--ink-500); font-size: 13px; }
+
+    section { padding: 94px 0; }
+    .section-soft { background: var(--canvas); }
+
+    .section-heading { max-width: 760px; margin-bottom: 44px; }
+    .section-kicker {
+      margin-bottom: 10px;
+      color: var(--blue-600);
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin-bottom: 14px;
+      font-size: clamp(31px, 4vw, 46px);
+      line-height: 1.18;
+      letter-spacing: -0.045em;
+    }
+
+    .section-heading > p { margin-bottom: 0; color: var(--ink-700); font-size: 17px; }
+
+    .pain-grid, .feature-grid, .fit-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: 0 8px 24px rgba(31, 67, 112, 0.05);
+    }
+
+    .pain-card, .feature-card { padding: 27px; }
+    .card-number {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 19px;
+      border-radius: 10px;
+      background: var(--blue-100);
+      color: var(--blue-700);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    h3 { margin-bottom: 9px; font-size: 20px; line-height: 1.35; letter-spacing: -0.025em; }
+    .card p { margin-bottom: 0; color: var(--ink-700); font-size: 14px; }
+
+    .compare-wrap {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .compare-table { width: 100%; border-collapse: collapse; }
+    .compare-table caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .compare-table th, .compare-table td { padding: 22px 25px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    .compare-table tr:last-child th, .compare-table tr:last-child td { border-bottom: 0; }
+    .compare-table thead th { background: #edf3fb; color: var(--ink-900); font-size: 15px; }
+    .compare-table thead th:nth-child(2) { color: var(--ink-500); }
+    .compare-table thead th:nth-child(3) { background: var(--blue-600); color: #fff; }
+    .compare-table tbody th { width: 18%; color: var(--ink-900); font-size: 14px; }
+    .compare-table tbody td { width: 41%; color: var(--ink-700); font-size: 14px; }
+    .compare-table tbody td:last-child { background: var(--blue-050); color: #173e75; font-weight: 700; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    .flow-step {
+      position: relative;
+      padding: 22px 20px;
+      border: 1px solid #cfe0f7;
+      border-radius: 14px;
+      background: #fff;
+    }
+
+    .flow-step::after {
+      content: "→";
+      position: absolute;
+      right: -20px;
+      top: 50%;
+      z-index: 2;
+      color: var(--blue-500);
+      font-size: 20px;
+      font-weight: 900;
+      transform: translateY(-50%);
+    }
+
+    .flow-step:last-child::after { display: none; }
+    .flow-step span { display: block; margin-bottom: 5px; color: var(--blue-600); font-size: 12px; font-weight: 900; }
+    .flow-step strong { font-size: 15px; }
+
+    .feature-card { min-height: 205px; }
+    .feature-card .tag {
+      display: inline-flex;
+      margin-bottom: 17px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      background: var(--blue-100);
+      color: var(--blue-700);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .showcase-grid { display: grid; grid-template-columns: 0.82fr 1.18fr; gap: 24px; align-items: start; }
+    .shot-card { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: var(--shadow-sm); }
+    .shot-card img { width: 100%; background: #fff; }
+    .shot-copy { padding: 20px 22px 23px; }
+    .shot-copy p { margin-bottom: 0; color: var(--ink-700); font-size: 14px; }
+
+    .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .balance-card { padding: 30px; }
+    .balance-card.pros { border-top: 5px solid var(--green); }
+    .balance-card.cons { border-top: 5px solid var(--amber); }
+    .balance-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 19px; }
+    .balance-title span { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 900; }
+    .pros .balance-title span { background: var(--green-bg); color: var(--green); }
+    .cons .balance-title span { background: var(--amber-bg); color: var(--amber); }
+    .check-list { display: grid; gap: 13px; margin: 0; padding: 0; list-style: none; }
+    .check-list li { position: relative; padding-left: 25px; color: var(--ink-700); font-size: 14px; }
+    .check-list li::before { position: absolute; left: 0; top: 0.1em; font-weight: 900; }
+    .pros .check-list li::before { content: "✓"; color: var(--green); }
+    .cons .check-list li::before { content: "!"; width: 17px; text-align: center; color: var(--amber); }
+
+    .fit-card { padding: 27px; }
+    .fit-card.good { background: linear-gradient(180deg, #fff, #f7fbff); }
+    .fit-card.caution { background: linear-gradient(180deg, #fff, #fffaf1); }
+    .fit-card strong { display: block; margin-bottom: 8px; font-size: 17px; }
+    .fit-card ul { margin: 0; padding-left: 19px; color: var(--ink-700); font-size: 14px; }
+    .fit-card li + li { margin-top: 7px; }
+
+    .security-panel {
+      display: grid;
+      grid-template-columns: 0.72fr 1.28fr;
+      gap: 42px;
+      padding: 40px;
+      border: 1px solid #cbdcf3;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(135deg, #f0f6ff, #fff);
+    }
+
+    .security-panel h2 { font-size: clamp(29px, 3.6vw, 42px); }
+    .security-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .security-item { padding: 19px; border: 1px solid #d6e3f4; border-radius: 13px; background: rgba(255, 255, 255, 0.84); }
+    .security-item strong { display: block; margin-bottom: 5px; font-size: 14px; }
+    .security-item p { margin: 0; color: var(--ink-700); font-size: 13px; }
+
+    .warning-box {
+      margin-top: 20px;
+      padding: 18px 20px;
+      border-left: 4px solid var(--amber);
+      border-radius: 0 12px 12px 0;
+      background: var(--amber-bg);
+      color: #75440c;
+      font-size: 13px;
+    }
+
+    .steps-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    .adopt-step { padding: 25px; }
+    .adopt-step b { display: inline-grid; width: 30px; height: 30px; place-items: center; margin-bottom: 17px; border-radius: 9px; background: var(--ink-900); color: #fff; font-size: 13px; }
+    .adopt-step p { margin: 0; color: var(--ink-700); font-size: 14px; }
+
+    .faq { display: grid; gap: 12px; }
+    details { border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    summary { cursor: pointer; padding: 19px 22px; font-weight: 800; list-style-position: inside; }
+    details p { margin: 0; padding: 0 22px 21px; color: var(--ink-700); font-size: 14px; }
+
+    .cta-section { padding-top: 30px; }
+    .cta-panel {
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 30px;
+      padding: 48px;
+      border-radius: var(--radius-lg);
+      background: var(--ink-900);
+      color: #fff;
+    }
+
+    .cta-panel::after { content: ""; position: absolute; right: -80px; top: -100px; width: 300px; height: 300px; border-radius: 50%; background: rgba(40, 121, 239, 0.22); }
+    .cta-panel > * { position: relative; z-index: 1; }
+    .cta-panel h2 { margin-bottom: 9px; color: #fff; font-size: clamp(28px, 4vw, 42px); }
+    .cta-panel p { margin-bottom: 0; color: #cbd7e8; }
+    .cta-panel .button { background: #fff; color: var(--blue-700) !important; box-shadow: none; }
+
+    footer { padding: 42px 0; border-top: 1px solid var(--line); }
+    .footer-grid { display: flex; align-items: center; justify-content: space-between; gap: 30px; }
+    .footer-copy { color: var(--ink-500); font-size: 13px; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 16px; }
+    .footer-links a { color: var(--ink-700); font-size: 13px; font-weight: 700; }
+
+    :focus-visible { outline: 3px solid rgba(40, 121, 239, 0.42); outline-offset: 3px; }
+
+    @media (max-width: 980px) {
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { padding-top: 70px; }
+      .hero-grid, .showcase-grid, .security-panel { grid-template-columns: 1fr; }
+      .hero-visual { padding-left: 0; }
+      .floating-card { right: 10px; }
+      .trust-grid, .steps-grid { grid-template-columns: 1fr 1fr; }
+      .trust-item:nth-child(2) { border-right: 0; }
+      .trust-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .pain-grid, .feature-grid { grid-template-columns: 1fr 1fr; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .flow-step:nth-child(2)::after { display: none; }
+    }
+
+    @media (max-width: 700px) {
+      .container { width: min(calc(100% - 28px), var(--max-width)); }
+      .topbar { position: static; }
+      .nav { min-height: 62px; }
+      .nav-cta { min-height: 38px; padding-inline: 13px; font-size: 13px; }
+      .hero { padding: 58px 0 64px; }
+      h1 { font-size: clamp(39px, 13vw, 54px); }
+      .hero-actions .button { width: 100%; }
+      .floating-card { position: static; margin: 13px 8px 0; }
+      .trust-strip { margin-top: -18px; }
+      .trust-grid, .pain-grid, .feature-grid, .balance-grid, .fit-grid, .steps-grid, .security-list, .flow { grid-template-columns: 1fr; }
+      .trust-item { border-right: 0; border-bottom: 1px solid var(--line); }
+      .trust-item:nth-child(3) { border-bottom: 1px solid var(--line); }
+      .trust-item:last-child { border-bottom: 0; }
+      section { padding: 72px 0; }
+      .flow-step::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -25px; transform: translateX(-50%); }
+      .flow-step:nth-child(2)::after { display: block; }
+      .flow-step:last-child::after { display: none; }
+      .compare-wrap { overflow-x: auto; }
+      .compare-table { min-width: 680px; }
+      .security-panel, .cta-panel { padding: 28px 22px; }
+      .cta-panel { grid-template-columns: 1fr; }
+      .cta-panel .button { width: 100%; }
+      .footer-grid { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; }
+    }
+
+    @media print {
+      @page { size: A4; margin: 14mm; }
+      body { color: #111; background: #fff; font-size: 10pt; }
+      .topbar, .hero-actions, .cta-section { display: none !important; }
+      .hero, section { padding: 24px 0; background: #fff !important; }
+      .hero-grid, .showcase-grid, .security-panel { grid-template-columns: 1fr; }
+      .hero-visual { max-width: 680px; padding: 0; }
+      .window-frame, .card, .compare-wrap, .shot-card, .trust-grid { box-shadow: none; break-inside: avoid; }
+      .trust-strip { margin-top: 0; }
+      .feature-grid, .pain-grid, .steps-grid { grid-template-columns: 1fr 1fr; }
+      .floating-card { display: none; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 바로가기</a>
+
+  <header class="topbar">
+    <div class="container nav">
+      <a class="brand" href="#top" aria-label="QuickAccess 소개 맨 위로">
+        <img src="../assets/quickaccess-mark.png" alt="">
+        <span>QuickAccess</span>
+      </a>
+      <nav class="nav-links" aria-label="페이지 메뉴">
+        <a href="#comparison">도입 전후</a>
+        <a href="#features">주요 기능</a>
+        <a href="#pros-cons">장단점</a>
+        <a class="nav-cta" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v1.2.2" target="_blank" rel="noopener noreferrer">다운로드</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow">Windows 10/11용 빠른 실행 런처</div>
+          <h1>찾으러 가지 말고,<br><span class="accent">바로 여세요.</span></h1>
+          <p>QuickAccess는 자주 쓰는 폴더, 파일, 웹 링크를 하나의 패널에 모아 전역 단축키 한 번으로 여는 가벼운 Windows 상주형 런처입니다.</p>
+          <div class="hero-actions">
+            <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v1.2.2/QuickAccess.exe">v1.2.2 바로 다운로드</a>
+            <a class="button secondary" href="#comparison">도입 효과 살펴보기</a>
+          </div>
+          <div class="hero-note">별도 설치 없음 · 관리자 권한 불필요 · MIT 오픈소스 · Windows x64 · 현재 공개 EXE는 미서명</div>
+        </div>
+
+        <div class="hero-visual" aria-label="QuickAccess 빠른 실행 패널 화면">
+          <div class="window-frame">
+            <div class="window-bar" aria-hidden="true">
+              <span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span>
+            </div>
+            <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" fetchpriority="high" alt="폴더, 파일, 웹 링크 카드가 표시된 QuickAccess 빠른 실행 패널">
+          </div>
+          <div class="floating-card"><strong>Ctrl + Space</strong>앱 실행 중 커서가 있는 화면에 표시</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="container trust-strip" aria-label="제품 핵심 정보">
+      <div class="trust-grid">
+        <div class="trust-item"><strong>Portable EXE</strong><span>설치 과정 없이 바로 실행</span></div>
+        <div class="trust-item"><strong>전역 단축키</strong><span>다른 앱 위에서도 패널 호출</span></div>
+        <div class="trust-item"><strong>로컬 우선</strong><span>바로가기 정보는 PC에 저장</span></div>
+        <div class="trust-item"><strong>한글·멀티모니터</strong><span>혼합 DPI와 한글 경로 지원</span></div>
+      </div>
+    </div>
+
+    <section aria-labelledby="problem-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Why QuickAccess</div>
+          <h2 id="problem-title">작은 탐색을 반복하면<br>업무 흐름이 자주 끊깁니다</h2>
+          <p>QuickAccess는 거대한 검색 도구가 아니라, 매일 되풀이되는 “어디 있었지?”를 줄이는 데 집중합니다.</p>
+        </div>
+        <div class="pain-grid">
+          <article class="card pain-card">
+            <div class="card-number">01</div>
+            <h3>깊은 폴더를 매번 탐색</h3>
+            <p>탐색기를 열고 여러 폴더를 거쳐 같은 업무 위치를 반복해서 찾아갑니다.</p>
+          </article>
+          <article class="card pain-card">
+            <div class="card-number">02</div>
+            <h3>파일·웹 링크가 흩어짐</h3>
+            <p>즐겨찾기, 바탕화면, 최근 파일과 메신저 기록을 오가며 필요한 항목을 찾습니다.</p>
+          </article>
+          <article class="card pain-card">
+            <div class="card-number">03</div>
+            <h3>화면 전환으로 집중 분산</h3>
+            <p>작업 중인 창을 벗어나 검색하고 다시 돌아오는 과정에서 맥락이 끊깁니다.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-soft" id="comparison" aria-labelledby="comparison-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Before &amp; After</div>
+          <h2 id="comparison-title">도입 전과 후,<br>업무 동선이 단순해집니다</h2>
+          <p>절대적인 시간 절감 수치보다, 찾기 위해 거쳐야 하는 창과 판단 단계를 줄이는 방식입니다.</p>
+        </div>
+
+        <div class="compare-wrap">
+          <table class="compare-table">
+            <caption>QuickAccess 도입 전후 업무 흐름 비교</caption>
+            <thead>
+              <tr><th scope="col">비교 항목</th><th scope="col">도입 전</th><th scope="col">QuickAccess 도입 후</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">찾는 방법</th><td>탐색기·바탕화면·브라우저 즐겨찾기를 각각 확인</td><td>Ctrl + Space로 한 패널에서 선택</td></tr>
+              <tr><th scope="row">업무 시작</th><td>폴더 구조를 기억하거나 검색어를 다시 입력</td><td>업무 이름으로 저장된 카드를 바로 실행</td></tr>
+              <tr><th scope="row">새 항목 등록</th><td>위치와 이름을 따로 정리하거나 바로가기를 수동 생성</td><td>탐색기에서 Ctrl + Shift + Space로 빠르게 등록</td></tr>
+              <tr><th scope="row">항목 관리</th><td>파일·폴더·링크가 서로 다른 위치에 분산</td><td>설정 화면에서 이름, 순서, 경로를 한 번에 관리</td></tr>
+              <tr><th scope="row">경로 변경</th><td>깨진 바로가기를 찾아 새로 만들기</td><td>경고 카드에서 새로운 위치로 즉시 재지정</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flow" aria-label="QuickAccess 사용 흐름">
+          <div class="flow-step"><span>STEP 1</span><strong>자주 쓰는 항목 등록</strong></div>
+          <div class="flow-step"><span>STEP 2</span><strong>Ctrl + Space 입력</strong></div>
+          <div class="flow-step"><span>STEP 3</span><strong>원하는 카드 선택</strong></div>
+          <div class="flow-step"><span>STEP 4</span><strong>파일·폴더·링크 실행</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" aria-labelledby="features-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Core Features</div>
+          <h2 id="features-title">필요한 기능만<br>빠르고 명확하게</h2>
+          <p>패널 호출부터 등록, 복구, 개인화까지 일상적인 Windows 사용 흐름에 맞췄습니다.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="card feature-card"><span class="tag">실행</span><h3>파일·폴더·웹 링크 통합</h3><p>형식이 다른 업무 항목도 같은 카드 목록에서 한 번에 열 수 있습니다.</p></article>
+          <article class="card feature-card"><span class="tag">단축키</span><h3>커서 위치에 패널 표시</h3><p>마우스가 있는 모니터의 작업 영역 안에 패널을 배치해 시선 이동을 줄입니다.</p></article>
+          <article class="card feature-card"><span class="tag">등록</span><h3>탐색기에서 빠른 추가</h3><p>활성 탐색기의 선택 항목 또는 현재 폴더를 별도의 복사 과정 없이 등록합니다.</p></article>
+          <article class="card feature-card"><span class="tag">복구</span><h3>깨진 경로 바로 재지정</h3><p>이동·삭제된 항목은 상태를 표시하고, 같은 카드에서 새로운 위치를 선택할 수 있습니다.</p></article>
+          <article class="card feature-card"><span class="tag">개인화</span><h3>밝기·열 수·단축키 설정</h3><p>시스템·밝게·어둡게 모드와 2~5열 배치, 두 전역 단축키를 직접 조정합니다.</p></article>
+          <article class="card feature-card"><span class="tag">운영</span><h3>자동 실행·단일 인스턴스</h3><p>사용자 계정으로 조용히 시작하고, 중복 실행과 설정 파일 충돌을 방지합니다.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-soft" aria-labelledby="screens-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Actual Screens</div>
+          <h2 id="screens-title">실제 화면으로 보는<br>QuickAccess</h2>
+          <p>빠른 실행 패널은 작게, 환경 설정은 항목을 한눈에 관리할 수 있게 구성했습니다.</p>
+        </div>
+        <div class="showcase-grid">
+          <figure class="shot-card">
+            <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
+            <figcaption class="shot-copy"><h3>빠른 실행 패널</h3><p>예시 화면의 샘플 경로입니다. 카드 이름과 유형을 확인하고, 마우스 또는 키보드로 원하는 항목을 실행합니다.</p></figcaption>
+          </figure>
+          <figure class="shot-card">
+            <img src="screenshots/quickaccess-settings-light.png" width="2026" height="1471" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
+            <figcaption class="shot-copy"><h3>환경 설정</h3><p>예시 화면의 샘플 경로입니다. 바로가기 목록, 화면 스타일, 패널 열 수, 단축키와 Windows 자동 실행을 한곳에서 관리합니다.</p></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="pros-cons" aria-labelledby="balance-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Balanced View</div>
+          <h2 id="balance-title">장점과 한계를<br>함께 확인하세요</h2>
+          <p>도입 판단에 필요한 강점뿐 아니라 현재 배포 방식과 지원 범위의 제한도 공개합니다.</p>
+        </div>
+        <div class="balance-grid">
+          <article class="card balance-card pros">
+            <div class="balance-title"><h3>장점</h3><span>잘하는 것</span></div>
+            <ul class="check-list">
+              <li>설치 과정과 관리자 권한 없이 EXE 하나로 실행</li>
+              <li>파일·폴더·웹 링크를 동일한 패널에서 관리</li>
+              <li>키보드 전체 후킹 대신 Windows 공식 전역 단축키 API 사용</li>
+              <li>한글 경로, 혼합 DPI, 다중 모니터 환경 대응</li>
+              <li>설정 백업, 경로 상태 확인, 삭제 실행취소 제공</li>
+              <li>기본적으로 사용자 바로가기 정보를 외부로 전송하지 않음</li>
+            </ul>
+          </article>
+          <article class="card balance-card cons">
+            <div class="balance-title"><h3>한계·확인 사항</h3><span>도입 전 체크</span></div>
+            <ul class="check-list">
+              <li>Windows 10/11 x64 전용이며 macOS·Linux는 지원하지 않음</li>
+              <li>단일 EXE 특성상 최초 실행이 반복 실행보다 느릴 수 있음</li>
+              <li>일부 IME·IDE가 같은 단축키를 사용하면 조합 변경 필요</li>
+              <li>탐색기 빠른 등록은 Windows 파일 탐색기의 실제 경로만 지원</li>
+              <li>연결이 끊긴 네트워크 경로는 경고 상태로 표시될 수 있음</li>
+              <li>현재 공개 EXE는 코드 서명이 없어 SmartScreen 경고 가능</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-soft" aria-labelledby="fit-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Best Fit</div>
+          <h2 id="fit-title">이런 사용자와 업무에<br>특히 잘 맞습니다</h2>
+        </div>
+        <div class="fit-grid">
+          <article class="card fit-card good"><strong>반복 업무가 많은 실무자</strong><ul><li>매일 같은 폴더와 문서를 여는 업무</li><li>품질·생산·영업 등 정해진 자료 위치를 반복 사용</li></ul></article>
+          <article class="card fit-card good"><strong>파일과 웹 도구를 함께 쓰는 사용자</strong><ul><li>로컬 문서와 사내 포털을 함께 실행</li><li>업무별 시작 항목을 한 패널로 정리</li></ul></article>
+          <article class="card fit-card caution"><strong>다른 방식이 더 나을 수 있는 경우</strong><ul><li>조직 전체 중앙 배포·권한 통제가 필수인 환경</li><li>macOS·Linux 또는 모바일 중심 업무</li></ul></article>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="security-title">
+      <div class="container security-panel">
+        <div>
+          <div class="section-kicker">Security &amp; Privacy</div>
+          <h2 id="security-title">작지만 투명하게<br>동작합니다</h2>
+          <p style="color: var(--ink-700); margin-bottom: 0;">업무용 도구에서 중요한 권한, 저장 위치와 네트워크 사용 조건을 숨기지 않습니다.</p>
+        </div>
+        <div>
+          <div class="security-list">
+            <div class="security-item"><strong>관리자 권한 불필요</strong><p>일반 Windows 사용자 계정으로 실행합니다.</p></div>
+            <div class="security-item"><strong>공식 RegisterHotKey 사용</strong><p>키보드 전체를 기록하는 전역 훅을 사용하지 않습니다.</p></div>
+            <div class="security-item"><strong>로컬 설정 저장</strong><p>바로가기 정보는 %APPDATA% 아래 JSON에 저장됩니다.</p></div>
+            <div class="security-item"><strong>선택형 업데이트 확인</strong><p>직접 켠 경우에만 GitHub 공개 릴리스 정보를 요청합니다.</p></div>
+          </div>
+          <div class="warning-box"><strong>코드 서명 안내:</strong> v1.2.2 공개 파일은 Authenticode 미서명 파일입니다. GitHub 공식 Release에서 다운로드하고 Release에 기재된 SHA-256 해시를 확인하세요.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-soft" aria-labelledby="adopt-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">Getting Started</div>
+          <h2 id="adopt-title">도입은 네 단계면 충분합니다</h2>
+        </div>
+        <div class="steps-grid">
+          <article class="card adopt-step"><b>1</b><h3>다운로드</h3><p>GitHub 공식 Release에서 QuickAccess.exe를 받습니다.</p></article>
+          <article class="card adopt-step"><b>2</b><h3>실행</h3><p>최종 보관할 폴더에 둔 뒤 한 번 실행합니다.</p></article>
+          <article class="card adopt-step"><b>3</b><h3>항목 등록</h3><p>자주 쓰는 파일, 폴더와 웹 링크를 원하는 순서로 추가합니다.</p></article>
+          <article class="card adopt-step"><b>4</b><h3>단축키 사용</h3><p>Ctrl + Space를 눌러 패널을 열고 원하는 항목을 선택합니다.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="faq-title">
+      <div class="container">
+        <div class="section-heading">
+          <div class="section-kicker">FAQ</div>
+          <h2 id="faq-title">자주 묻는 질문</h2>
+        </div>
+        <div class="faq">
+          <details><summary>정말 설치가 필요 없나요?</summary><p>네. QuickAccess.exe를 원하는 폴더에 두고 실행하면 됩니다. 다만 설정, 백업과 로그는 사용자 AppData에 저장되며, Windows 자동 실행을 켜면 현재 사용자 시작프로그램 레지스트리에 실행 경로를 등록합니다.</p></details>
+          <details><summary>설정창의 X를 눌러도 프로그램이 남아 있어요.</summary><p>정상입니다. 전역 단축키를 받기 위해 시스템 트레이에 상주합니다. 완전히 종료하려면 트레이의 QuickAccess 아이콘을 우클릭하고 ‘종료’를 선택하세요.</p></details>
+          <details><summary>새 버전으로 바꾸면 자동 실행 경로도 바뀌나요?</summary><p>기존 버전을 트레이에서 완전히 종료하고 새 EXE를 최종 위치에서 한 번 실행하면, 자동 실행이 켜져 있는 경우 해당 새 경로로 등록을 복구합니다.</p></details>
+          <details><summary>삭제하려면 어떻게 하나요?</summary><p>트레이에서 종료하고 환경 설정에서 Windows 자동 실행을 끈 뒤 EXE를 삭제합니다. 개인 설정까지 지우려면 %APPDATA%\QuickAccess와 %LOCALAPPDATA%\QuickAccess 폴더를 선택적으로 삭제하면 됩니다.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-section" aria-label="다운로드 안내">
+      <div class="container cta-panel">
+        <div><h2>반복해서 찾는 시간을<br>한 번의 단축키로 바꿔보세요.</h2><p>QuickAccess Launcher v1.2.2 · Windows 10/11 x64 · Portable EXE</p></div>
+        <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v1.2.2" target="_blank" rel="noopener noreferrer">공식 Release 열기</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-grid">
+      <div class="footer-copy">QuickAccess Launcher · MIT License · Maintained by Daksle · v1.2.2</div>
+      <div class="footer-links">
+        <a href="https://github.com/Daksle-number-13/quickaccess-launcher" target="_blank" rel="noopener noreferrer">GitHub 저장소</a>
+        <a href="../output/pdf/QuickAccess_Easy_Manual_KO.pdf">쉬운 사용 설명서</a>
+        <a href="#top">맨 위로</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
