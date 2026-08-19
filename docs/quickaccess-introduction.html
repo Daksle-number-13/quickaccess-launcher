@@ -561,21 +561,29 @@
     .demo-pointer {
       position: absolute;
       z-index: 10;
-      width: 17px;
-      height: 25px;
-      background: #fff;
+      width: clamp(22px, 4.2vw, 28px);
+      height: clamp(32px, 6vw, 40px);
+      background: #0b172b;
       clip-path: polygon(0 0, 0 100%, 29% 72%, 46% 100%, 61% 92%, 45% 65%, 83% 64%);
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.82));
+      filter:
+        drop-shadow(1px 0 0 #fff)
+        drop-shadow(-1px 0 0 #fff)
+        drop-shadow(0 1px 0 #fff)
+        drop-shadow(0 -1px 0 #fff)
+        drop-shadow(0 3px 4px rgba(5, 18, 39, 0.55))
+        drop-shadow(0 0 7px rgba(255, 204, 51, 0.72));
       opacity: 0;
     }
 
     .click-pulse {
       position: absolute;
       z-index: 9;
-      width: 30px;
-      height: 30px;
-      border: 3px solid var(--blue-500);
+      width: 40px;
+      height: 40px;
+      border: 4px solid #ffd43b;
       border-radius: 50%;
+      background: rgba(255, 212, 59, 0.2);
+      box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(8, 27, 55, 0.72), 0 5px 18px rgba(8, 27, 55, 0.32);
       opacity: 0;
       transform: translate(-50%, -50%) scale(0.35);
     }
@@ -823,7 +831,7 @@
     @keyframes pointer-open {
       0%, 34% { left: 78%; top: 77%; opacity: 0; }
       40% { left: 78%; top: 77%; opacity: 1; }
-      56%, 63% { left: 31%; top: 51%; opacity: 1; }
+      49%, 63% { left: 31%; top: 51%; opacity: 1; }
       68%, 100% { left: 31%; top: 51%; opacity: 0; }
     }
     @keyframes click-open {
@@ -847,7 +855,7 @@
     @keyframes pointer-register {
       0%, 35% { left: 92%; top: 38%; opacity: 0; }
       42% { left: 92%; top: 38%; opacity: 1; }
-      54%, 60% { left: 85%; top: 82%; opacity: 1; }
+      49%, 60% { left: 85%; top: 82%; opacity: 1; }
       65%, 100% { left: 85%; top: 82%; opacity: 0; }
     }
     @keyframes click-register {
