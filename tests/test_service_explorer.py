@@ -202,7 +202,7 @@ class ExplorerQuickAddTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, ExplorerErrorCode.NO_FILESYSTEM_PATH)
 
-    def test_lnk_selection_resolves_to_shortcut_target(self) -> None:
+    def test_lnk_selection_preserves_the_shortcut_file(self) -> None:
         window = _Window(22, [], r"C:\Ignored")
         shortcut = _ShortcutItem(r"C:\Desktop\바로가기.lnk", r"D:\실제\대상 폴더")
         selected = type(
@@ -213,17 +213,12 @@ class ExplorerQuickAddTests(unittest.TestCase):
         window.Document.SelectedItems = lambda: selected
         service, _runtime = self.make_service(_Shell([window]))
 
-        with patch(
-            "quickaccess.services.explorer.detect_item_type",
-            return_value="folder",
-        ) as detect:
-            result = service.get_target()
+        result = service.get_target()
 
         self.assertTrue(result.success)
-        self.assertEqual(result.path, r"D:\실제\대상 폴더")
-        self.assertEqual(result.item_type, "folder")
-        self.assertEqual(result.suggested_name, "대상 폴더")
-        detect.assert_called_once_with(r"D:\실제\대상 폴더")
+        self.assertEqual(result.path, r"C:\Desktop\바로가기.lnk")
+        self.assertEqual(result.item_type, "file")
+        self.assertEqual(result.suggested_name, "바로가기.lnk")
 
     def test_lnk_selection_falls_back_to_shortcut_file_when_unresolvable(self) -> None:
         window = _Window(22, [], r"C:\Ignored")

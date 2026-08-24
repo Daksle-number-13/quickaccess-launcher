@@ -2,19 +2,32 @@
 
 ## 자동 검증
 
-- [x] `python -m pytest -q -p no:cacheprovider` — 115개 통과
-- [x] `python -m compileall -q main.py quickaccess tests`
+- [x] `python -m pytest -q -p no:cacheprovider` — 159개 통과, 16개 하위 테스트 통과
+- [x] `python -m compileall -q main.py quickaccess tests devtools`
 - [x] `python -m pip check`
 - [x] Python 3.13.15 격리 환경에 의존성 재설치
 - [x] `.\build.ps1 -Clean -PythonExecutable C:\path\to\python.exe`
 - [x] `dist\QuickAccess.exe` 생성
-- [x] `dist\QuickAccess.exe --smoke-test` 종료 코드 0
+- [x] v1.2.3 `dist\QuickAccess.exe --smoke-test` 실제 데스크톱 6회 종료 코드 0
 - [x] PyInstaller 경고 검토 — 앱 필수 모듈 누락 없음
 
-검증 빌드: `1.2.2.0`, 14,190,342 bytes,
-SHA-256 `F15880FA37A4DBD3060188E57CA15C8C4E58983B1D9F26EA004A93085D0AE573`.
+검증 빌드: `1.2.3.0`, 14,211,951 bytes,
+SHA-256 `E620BCA4DA3F9FB72DAAE9BCB89C68CF9563404FC80B153EAB0E65E48FDC0FCD`.
 현재 Authenticode 상태는 `NotSigned`이며, 서명 후에는 해시와 스모크 테스트를
 서명된 파일 기준으로 다시 확인해야 합니다.
+
+## 성능 게이트
+
+세부 측정 정의와 재현 조건은 [성능 측정 문서](docs/PERFORMANCE.md)를 따릅니다.
+
+- [x] 지정 릴리스 PC에서 팝업 warm-path 5회 워밍업·30회 측정
+- [x] 동일 내용의 warm path에서 렌더 트리 재생성 0회
+- [x] `popup_warm_show_call_ms` p95 25ms 이하 — 20항목 1.9ms
+- [x] v1.2.3 최종 배포 산출물의 one-file 시작 6회 측정 및 JSON 보관 —
+      첫 실행 ready 3.277초, 이후 median 3.203초(p95 4.942초), 정상 종료 6/6
+- [x] 동일 코드의 버전 변경 전 빌드에서 첫 실행 4.333초, 이후
+      resident-ready median 3.888초(p95 4.125초) 기록
+- [ ] 깨끗한 PC 재부팅 직후 실행→첫 패널 표시 시간을 별도 확인
 
 ## 깨끗한 PC 검증
 
@@ -45,7 +58,7 @@ SHA-256 `F15880FA37A4DBD3060188E57CA15C8C4E58983B1D9F26EA004A93085D0AE573`.
 - [ ] 작업표시줄이 상/하/좌/우에 있을 때 작업 영역 내부 보정
 - [ ] 한글 파일·폴더 추가, 이름 수정, 삭제, 위/아래 이동, 재시작 복원
 - [ ] 삭제 후 토스트의 `실행취소` 버튼으로 같은 순서에 복구
-- [ ] 누락/느린 경로의 회색 `!`, 클릭 후 같은 유형 경로 재지정
+- [ ] 누락 경로는 재지정되고, 응답 지연 경로는 클릭 시 열기를 시도함
 - [ ] 연결 끊긴 UNC가 팝업 표시·설정·종료를 막지 않음
 - [ ] 패널에서 방향키로 카드 간 이동, Enter/Space로 실행
 - [ ] 패널 카드 우클릭 → 경로 복사가 클립보드에 정확히 반영
@@ -57,8 +70,7 @@ SHA-256 `F15880FA37A4DBD3060188E57CA15C8C4E58983B1D9F26EA004A93085D0AE573`.
 - [ ] 여러 탐색기 창 중 활성 창과 일치
 - [ ] Windows 11 탐색기 탭 동작 확인
 - [ ] Quick Access/내 PC/검색/휴지통 같은 가상 위치 거부
-- [ ] 바로가기(`.lnk`) 선택 시 대상 파일·폴더 경로로 등록(깨진 바로가기는
-      `.lnk` 자체로 대체 등록)
+- [ ] 바로가기(`.lnk`) 선택 시 `.lnk` 자체를 등록해 실행 인수·작업 폴더 보존
 - [ ] OneDrive, UNC, 연결 드라이브, 탐색기 창 닫힘 경쟁 조건
 - [ ] COM 접근이 차단되어도 상주 프로세스가 계속 동작
 
@@ -80,7 +92,8 @@ SHA-256 `F15880FA37A4DBD3060188E57CA15C8C4E58983B1D9F26EA004A93085D0AE573`.
 - [ ] xlsx/pdf/exe 등 확장자별로 실제 파일 아이콘이 카드에 표시됨
 - [ ] 아이콘이 아직 준비되지 않았을 때 기존 폴더/파일 기본 아이콘이 즉시
       보이고, 패널을 여는 속도가 이전과 체감상 동일함
-- [ ] 같은 확장자를 가진 여러 항목이 아이콘 하나를 공유함(중복 추출 없음)
+- [ ] 일반 문서 확장자는 아이콘을 공유하고, `.exe`·`.lnk`·`.ico`는 파일별
+      실제 아이콘을 표시함
 - [ ] 깨진 경로(회색 `!`) 카드는 아이콘이 있어도 기존 경고 아이콘을 유지함
 - [ ] pywin32 아이콘 추출이 실패해도 토스트·크래시 없이 기본 아이콘으로
       계속 동작함(예: 잠긴 파일, 네트워크 드라이브의 파일)

@@ -8,7 +8,14 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from ..services.monitor import NativeMonitorService, Rect, Size, center_window_in_work_area
+from ..services.monitor import (
+    NativeMonitorService,
+    Point,
+    Rect,
+    Size,
+    center_window_in_work_area,
+    clamp_window_to_work_area,
+)
 from .theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -52,6 +59,7 @@ class TextInputDialog(ctk.CTkToplevel):
         self.withdraw()
         self._result: str | None = None
         self._validator = validator
+        self._parent = parent
 
         self.title(title)
         self.resizable(False, False)
@@ -66,31 +74,54 @@ class TextInputDialog(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.bind("<Escape>", lambda _event: self._cancel())
         self.bind("<Return>", lambda _event: self._confirm())
+        self.bind("<Tab>", self._cycle_keyboard_focus, add="+")
+        self.bind(
+            "<Shift-Tab>",
+            lambda event: self._cycle_keyboard_focus(event, reverse=True),
+            add="+",
+        )
 
-        card = ctk.CTkFrame(
+        self._card = ctk.CTkFrame(
             self,
             fg_color=SURFACE,
             corner_radius=14,
             border_width=1,
             border_color=BORDER,
         )
+        card = self._card
         card.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
         card.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
+        self._prompt_label = ctk.CTkLabel(
             card,
             text=prompt,
             font=font(13, "bold"),
             text_color=TEXT,
             anchor="w",
-        ).grid(row=0, column=0, columnspan=2, padx=22, pady=(20, 4), sticky="ew")
-        ctk.CTkLabel(
+        )
+        self._prompt_label.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            padx=22,
+            pady=(20, 4),
+            sticky="ew",
+        )
+        self._helper_label = ctk.CTkLabel(
             card,
             text="설정에서 언제든 다시 변경할 수 있습니다.",
             font=font(10),
             text_color=MUTED,
             anchor="w",
-        ).grid(row=1, column=0, columnspan=2, padx=22, pady=(0, 13), sticky="ew")
+        )
+        self._helper_label.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            padx=22,
+            pady=(0, 13),
+            sticky="ew",
+        )
 
         self._entry = ctk.CTkEntry(
             card,
@@ -103,6 +134,7 @@ class TextInputDialog(ctk.CTkToplevel):
             font=font(12),
         )
         self._entry.grid(row=2, column=0, columnspan=2, padx=22, sticky="ew")
+        self._entry._entry.configure(takefocus=True)
         self._entry.insert(0, initial_value)
         self._entry.select_range(0, "end")
 
@@ -116,7 +148,7 @@ class TextInputDialog(ctk.CTkToplevel):
         self._error.grid(row=3, column=0, columnspan=2, padx=22, pady=(6, 0), sticky="ew")
         self._error.grid_remove()
 
-        ctk.CTkButton(
+        self._cancel_button = ctk.CTkButton(
             card,
             text="취소",
             width=88,
@@ -129,8 +161,15 @@ class TextInputDialog(ctk.CTkToplevel):
             border_color=BORDER,
             text_color=MUTED,
             command=self._cancel,
-        ).grid(row=4, column=0, padx=(22, 6), pady=(18, 20), sticky="e")
-        ctk.CTkButton(
+        )
+        self._cancel_button.grid(
+            row=4,
+            column=0,
+            padx=(22, 6),
+            pady=(18, 20),
+            sticky="e",
+        )
+        self._confirm_button = ctk.CTkButton(
             card,
             text="확인",
             width=88,
@@ -140,7 +179,16 @@ class TextInputDialog(ctk.CTkToplevel):
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
             command=self._confirm,
-        ).grid(row=4, column=1, padx=(0, 22), pady=(18, 20), sticky="e")
+        )
+        self._confirm_button.grid(
+            row=4,
+            column=1,
+            padx=(0, 22),
+            pady=(18, 20),
+            sticky="e",
+        )
+        self._enable_keyboard_button(self._cancel_button)
+        self._enable_keyboard_button(self._confirm_button)
 
         self.update_idletasks()
         self._center_over_parent(parent)
@@ -154,28 +202,146 @@ class TextInputDialog(ctk.CTkToplevel):
         self.grab_set()
         self.after(20, self._entry.focus_force)
 
-    def _center_over_parent(self, parent: tk.Misc) -> None:
-        width = self.winfo_reqwidth()
-        height = self.winfo_reqheight()
+    @staticmethod
+    def _enable_keyboard_button(button: ctk.CTkButton) -> None:
+        target = getattr(button, "_canvas", None)
+        if not isinstance(target, tk.Misc):
+            return
+        target.configure(takefocus=True)
+        resting_border_width = int(button.cget("border_width"))
+        resting_border_color = button.cget("border_color")
+
+        def activate(_event: tk.Event[tk.Misc]) -> str:
+            button.invoke()
+            return "break"
+
+        button.bind("<Return>", activate, add="+")
+        button.bind("<space>", activate, add="+")
+        button.bind(
+            "<FocusIn>",
+            lambda _event: button.configure(border_width=2, border_color=ACCENT),
+            add="+",
+        )
+        button.bind(
+            "<FocusOut>",
+            lambda _event: button.configure(
+                border_width=resting_border_width,
+                border_color=resting_border_color,
+            ),
+            add="+",
+        )
+
+    def _cycle_keyboard_focus(
+        self,
+        _event: tk.Event[tk.Misc],
+        *,
+        reverse: bool = False,
+    ) -> str:
+        targets = [
+            self._entry._entry,
+            self._cancel_button._canvas,
+            self._confirm_button._canvas,
+        ]
+        focused = self.focus_get()
         try:
-            if not parent.winfo_viewable():
-                raise tk.TclError("parent is hidden")
-            x = parent.winfo_rootx() + max(0, (parent.winfo_width() - width) // 2)
-            y = parent.winfo_rooty() + max(0, (parent.winfo_height() - height) // 2)
-        except tk.TclError:
-            # ``winfo_req*`` already reports physical pixels.  CTk's geometry
-            # method scales only explicit width/height, not position offsets.
-            rendered = Size(width, height)
-            try:
-                monitor = NativeMonitorService()
+            current = targets.index(focused) if focused is not None else (-1 if not reverse else 0)
+        except ValueError:
+            current = -1 if not reverse else 0
+        offset = -1 if reverse else 1
+        targets[(current + offset) % len(targets)].focus_set()
+        return "break"
+
+    def _center_over_parent(self, parent: tk.Misc) -> None:
+        monitor = NativeMonitorService()
+        parent_is_visible = False
+        try:
+            parent_is_visible = bool(parent.winfo_viewable())
+            if parent_is_visible:
+                anchor = Point(
+                    parent.winfo_rootx() + parent.winfo_width() // 2,
+                    parent.winfo_rooty() + parent.winfo_height() // 2,
+                )
+            else:
                 cursor = monitor.get_cursor_position()
-                work_area = monitor.get_monitor_work_area(cursor)
-                position = center_window_in_work_area(rendered, work_area)
-                x, y = position.x, position.y
-            except Exception:
-                x = (self.winfo_screenwidth() - rendered.width) // 2
-                y = (self.winfo_screenheight() - rendered.height) // 2
-        self.geometry(position_geometry(x, y))
+                anchor = cursor
+            work_area = monitor.get_monitor_work_area(anchor)
+        except Exception:
+            work_area = Rect(
+                0,
+                0,
+                max(1, self.winfo_screenwidth()),
+                max(1, self.winfo_screenheight()),
+            )
+
+        scale = max(0.1, self._get_window_scaling())
+        available_width = max(1, int((work_area.width - 24) / scale))
+        available_height = max(1, int((work_area.height - 24) / scale))
+        compact = available_width < 460 or available_height < 280
+        outer_padding = 8 if compact else 12
+        inner_padding = 16 if compact else 22
+        content_width = max(
+            150,
+            min(390, available_width - outer_padding * 2 - inner_padding * 2),
+        )
+
+        self._card.grid_configure(
+            padx=outer_padding,
+            pady=outer_padding,
+        )
+        self._prompt_label.grid_configure(
+            padx=inner_padding,
+            pady=(12 if compact else 20, 4),
+        )
+        self._helper_label.grid_configure(
+            padx=inner_padding,
+            pady=(0, 9 if compact else 13),
+        )
+        self._entry.configure(width=content_width, height=36 if compact else 40)
+        self._entry.grid_configure(padx=inner_padding)
+        self._error.configure(wraplength=content_width)
+        self._error.grid_configure(padx=inner_padding)
+        self._prompt_label.configure(wraplength=content_width)
+        self._helper_label.configure(wraplength=content_width)
+        self._cancel_button.configure(
+            width=80 if compact else 88,
+            height=34 if compact else 36,
+        )
+        self._confirm_button.configure(
+            width=80 if compact else 88,
+            height=34 if compact else 36,
+        )
+        self._cancel_button.grid_configure(
+            padx=(inner_padding, 6),
+            pady=(12 if compact else 18, 12 if compact else 20),
+        )
+        self._confirm_button.grid_configure(
+            padx=(0, inner_padding),
+            pady=(12 if compact else 18, 12 if compact else 20),
+        )
+        self.update_idletasks()
+
+        # ``winfo_req*`` reports physical pixels, while CTk scales explicit
+        # geometry dimensions.  Limit the logical size before positioning.
+        requested_width = max(1, math.ceil(self.winfo_reqwidth() / scale))
+        requested_height = max(1, math.ceil(self.winfo_reqheight() / scale))
+        logical_width = min(requested_width, available_width)
+        logical_height = min(requested_height, available_height)
+        rendered = Size(
+            self._apply_window_scaling(logical_width),
+            self._apply_window_scaling(logical_height),
+        )
+        if parent_is_visible:
+            desired = Point(
+                parent.winfo_rootx() + (parent.winfo_width() - rendered.width) // 2,
+                parent.winfo_rooty() + (parent.winfo_height() - rendered.height) // 2,
+            )
+            position = clamp_window_to_work_area(desired, rendered, work_area)
+        else:
+            position = center_window_in_work_area(rendered, work_area)
+        self.geometry(
+            f"{logical_width}x{logical_height}"
+            f"{position_geometry(position.x, position.y)}"
+        )
 
     def _confirm(self) -> None:
         value = self._entry.get().strip()
@@ -184,6 +350,8 @@ class TextInputDialog(ctk.CTkToplevel):
             self._error.configure(text=error)
             self._error.grid()
             self._entry.configure(border_color=DANGER)
+            self.update_idletasks()
+            self._center_over_parent(self._parent)
             self._entry.focus_force()
             return
         self._result = value

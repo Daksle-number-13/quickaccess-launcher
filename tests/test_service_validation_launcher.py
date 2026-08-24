@@ -92,6 +92,42 @@ class PathValidationTests(unittest.TestCase):
             release_old.set()
             validator.close()
 
+    def test_blocked_paths_never_exceed_worker_limit(self) -> None:
+        release = threading.Event()
+        all_timed_out = threading.Event()
+        started_lock = threading.Lock()
+        started = 0
+        received = []
+
+        def blocked_exists(_path: str) -> bool:
+            nonlocal started
+            with started_lock:
+                started += 1
+            release.wait(1)
+            return True
+
+        def callback(result: object) -> None:
+            received.append(result)
+            if len(received) == 20:
+                all_timed_out.set()
+
+        validator = PathValidationService(
+            callback,
+            timeout_seconds=0.05,
+            exists=blocked_exists,
+            max_workers=3,
+        )
+        try:
+            for index in range(20):
+                validator.validate(str(index), rf"\\server\offline\{index}")
+            self.assertTrue(all_timed_out.wait(1))
+            with started_lock:
+                self.assertLessEqual(started, 3)
+            self.assertTrue(all(result.status is PathStatus.TIMEOUT for result in received))
+        finally:
+            release.set()
+            validator.close()
+
 
 class FileLauncherTests(unittest.TestCase):
     def test_success_calls_startfile_once(self) -> None:

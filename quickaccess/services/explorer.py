@@ -9,9 +9,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from ..models import detect_item_type
-
-
 class ExplorerErrorCode(str, Enum):
     UNAVAILABLE = "unavailable"
     NO_FOREGROUND_EXPLORER = "no_foreground_explorer"
@@ -90,23 +87,6 @@ def _filesystem_path(value: object) -> str | None:
     if not ntpath.isabs(text):
         return None
     return ntpath.normpath(text)
-
-
-def _resolve_shortcut_target(selected_item: object, selected_path: str) -> str | None:
-    """Resolve a selected ``.lnk`` shortcut to the file/folder it points at.
-
-    ``FolderItem.Path`` for a shortcut is the ``.lnk`` file itself, not its
-    target, so registering it without resolution would launch the shortcut
-    icon instead of the destination the user actually meant to add.
-    """
-
-    if not selected_path.casefold().endswith(".lnk"):
-        return None
-    try:
-        target = _filesystem_path(selected_item.GetLink.Path)
-    except Exception:
-        return None
-    return target
 
 
 def _suggested_name(path: str) -> str:
@@ -249,12 +229,6 @@ class ExplorerQuickAddService:
             selected_path = _filesystem_path(selected_item.Path)
             if selected_path is None:
                 return None, ExplorerTargetSource.SELECTION, None
-
-            shortcut_target = _resolve_shortcut_target(selected_item, selected_path)
-            if shortcut_target is not None:
-                return shortcut_target, ExplorerTargetSource.SELECTION, detect_item_type(
-                    shortcut_target
-                )
 
             try:
                 item_type = "folder" if bool(selected_item.IsFolder) else "file"

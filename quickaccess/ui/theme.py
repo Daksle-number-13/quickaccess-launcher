@@ -77,7 +77,7 @@ def icon_font(size: int) -> tuple[str, int]:
 
 
 def brand_image(size: int) -> ctk.CTkImage:
-    """Return the shared Park Jin-Su signature mark for a CTk widget."""
+    """Return the shared QuickAccess brand mark for a CTk widget."""
 
     artwork = create_brand_icon(max(32, size * 2))
     return ctk.CTkImage(light_image=artwork, dark_image=artwork, size=(size, size))

@@ -10,6 +10,7 @@ venv/
 python-*-amd64.exe
 build/
 dist/
+artifacts/
 *.spec.bak
 
 # Local signing credentials must never enter source control.

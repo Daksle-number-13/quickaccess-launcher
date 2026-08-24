@@ -13,6 +13,9 @@
 [QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
 따라 하면 됩니다.
 
+기능과 도입 전후 비교, 실제 동작 예시는
+[QuickAccess 제품 소개](docs/quickaccess-introduction.html)에서 볼 수 있습니다.
+
 현재 공개 배포판에는 Authenticode 코드 서명이 적용되지 않았습니다. Windows에서
 `알 수 없는 게시자` 또는 SmartScreen 경고가 표시될 수 있으므로 반드시 이 저장소의
 공식 Release에서 다운로드하고, 각 Release 안내에 적힌 SHA-256 값과 파일 해시를
@@ -32,8 +35,12 @@ Get-FileHash .\QuickAccess.exe -Algorithm SHA256
 - 공개 EXE의 서명 여부와 SHA-256 값은 각 Release 안내에 명시합니다.
 - 기본 설정에서는 정보를 외부 시스템으로 전송하지 않습니다.
 - 사용자가 `새 버전 자동 확인`을 직접 켠 경우에만
-  [GitHub Releases API](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)에서
+  [GitHub Releases API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)에서
   공개 릴리스 정보만 확인하며, 저장된 바로가기 이름과 경로는 전송하지 않습니다.
+
+자세한 내용은 [개인정보 및 네트워크 정책](PRIVACY.md),
+[보안 정책](SECURITY.md), [제3자 소프트웨어 고지](THIRD_PARTY_NOTICES.md)를
+확인하세요.
 
 ## 동작 화면
 
@@ -52,14 +59,16 @@ Get-FileHash .\QuickAccess.exe -Algorithm SHA256
 
 - `Ctrl+Space`: 커서가 있는 모니터의 작업 영역 안에 런처 패널 표시
 - `Ctrl+Shift+Space`: 현재 활성화된 파일 탐색기의 선택 항목 또는 폴더 등록
-  (바로가기(`.lnk`)를 선택하면 대상 파일·폴더 경로를 자동으로 풀어 등록)
+  (바로가기(`.lnk`)는 실행 인수·작업 폴더 같은 Windows 속성을 보존하도록
+  바로가기 파일 자체를 등록)
 - 파일·폴더·웹 링크 추가, 이름/링크 수정, 삭제(실행취소 지원), `▲/▼` 고정 순서 변경
 - 시스템/밝게/어둡게 화면 스타일, 2~5열 격자, 두 전역 핫키 변경
   (`Ctrl+Space`처럼 IME·IDE와 자주 겹치는 조합은 설정에서 경고 표시)
 - 패널에서 방향키로 버튼 간 이동, 우클릭으로 경로를 클립보드에 복사
 - 등록한 파일의 실제 확장자 아이콘을 백그라운드에서 불러와 표시(불러오기 전이나
   실패 시에는 기존 폴더/파일 기본 아이콘을 그대로 사용, 첫 표시 속도에 영향 없음)
-- 누락되거나 응답이 느린 경로를 회색 `!` 버튼으로 표시하고 즉시 재지정
+- 누락 경로는 회색 `!`로 표시해 재지정하고, 응답 지연 경로는 사용자가 직접
+  열기를 시도할 수 있도록 구분
 - 시스템 트레이 메뉴: `패널 열기`, `설정`, `종료`
 - 사용자별 자동 실행, 단일 인스턴스, 한글 경로 및 UTF-8 JSON 지원
 - Windows 11 계열 카드 UI, 저장되는 밝기 모드, 혼합 DPI 모니터 대응
@@ -95,7 +104,7 @@ python main.py
 
 1. `Ctrl+Space`를 누릅니다.
 2. 원하는 버튼을 클릭합니다.
-3. 항목 관리는 패널 우측 아래 `⚙ 설정` 또는 트레이의 `설정`에서 합니다.
+3. 항목 관리는 패널 우측 위 `⚙ 설정` 또는 트레이의 `설정`에서 합니다.
 
 탐색기 빠른 등록은 등록할 파일이나 폴더가 보이는 탐색기를 먼저 활성화한 뒤
 `Ctrl+Shift+Space`를 누릅니다. 선택된 항목이 있으면 첫 번째 항목을, 없으면
@@ -114,17 +123,21 @@ JSON도 변경되지 않습니다.
 
 ```powershell
 python -m pytest -q -p no:cacheprovider
-python -m compileall -q main.py quickaccess tests
+python -m compileall -q main.py quickaccess tests devtools
 python -m pip check
 python main.py --smoke-test
 ```
 
 자동 테스트는 데이터 마이그레이션·원자 저장·손상 복구·고정 순서·핫키 파싱과
 롤백·작업 영역 경계 보정·경로 검사 타임아웃과 오래된 결과 무시·탐색기 COM
-선택 정책·바로가기(.lnk) 대상 해석·아이콘 캐시/중복 요청 방지·트레이 큐·
+선택 정책·바로가기(.lnk) 속성 보존·아이콘 캐시/중복 요청 방지·트레이 큐·
 시작프로그램 명령·단일 인스턴스·실행취소·업데이트 확인·실제 Tk 토스트 생성
 등을 검사합니다. `.github/workflows/ci.yml`이 `main` 커밋과 모든 PR마다
 Windows 러너에서 이 테스트 스위트를 자동 실행합니다.
+
+팝업 warm path와 one-file 시작 시간은 공유 CI의 불안정한 wall-clock 기준에서
+분리합니다. 측정 조건과 릴리스 PC용 선택 게이트는
+[성능 측정 문서](docs/PERFORMANCE.md)를 참고하세요.
 
 셸 아이콘 추출(`quickaccess/services/icons.py`)은 별도 `win32ui` 모듈 없이
 Windows Shell/GDI API를 직접 사용합니다. 자동 테스트는 캐싱·중복 방지·실패
@@ -142,9 +155,9 @@ Windows Shell/GDI API를 직접 사용합니다. 자동 테스트는 캐싱·중
 테마·폰트와 pystray/pywin32 동적 모듈을 명시적으로 수집하고, UPX를 사용하지
 않는 one-file/windowed 빌드입니다.
 
-릴리스 빌드는 보안 수정이 포함된 Python 3.13.15 이상을 요구합니다. 일반 소스
-실행의 최소 버전은 Python 3.11이지만, 구 Python 런타임이 EXE에 포함되지 않도록
-빌드 스크립트가 릴리스 인터프리터 버전을 검사합니다.
+재현 가능한 x64 산출물을 위해 릴리스 빌드는 Windows x64 Python 3.13.15를
+정확히 요구합니다. 일반 소스 실행의 최소 버전은 Python 3.11이지만, 다른 버전이나
+아키텍처의 런타임이 EXE에 포함되지 않도록 빌드 스크립트가 인터프리터를 검사합니다.
 
 > CustomTkinter의 공식 권장 배포 방식은 onedir입니다. 이 프로젝트는 제품
 > 요구사항 때문에 모든 리소스를 수집하는 one-file 사양을 사용합니다. 최종
@@ -204,4 +217,4 @@ quickaccess.spec           # 단일 EXE PyInstaller 구성
 
 ## 라이선스
 
-[MIT License](LICENSE)
+[MIT License](LICENSE) · [제3자 소프트웨어 고지](THIRD_PARTY_NOTICES.md)

@@ -6,6 +6,7 @@ import ctypes
 from ctypes import wintypes
 import ntpath
 import os
+import queue
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -200,6 +201,9 @@ def icon_key(path: str, item_type: str) -> str:
     if item_type == "url":
         return "\0url"
     extension = ntpath.splitext(path)[1].strip().lower()
+    if extension in {".exe", ".ico", ".lnk"}:
+        normalized_path = ntpath.normcase(ntpath.normpath(path.strip()))
+        return f"\0path:{normalized_path}"
     return extension or "\0file"
 
 
@@ -213,7 +217,10 @@ class IconService:
         size: int = 32,
         on_callback_error: Callable[[Exception], object] | None = None,
         api: _IconApi | None | object = "auto",
+        max_workers: int = 4,
     ) -> None:
+        if max_workers <= 0:
+            raise ValueError("max_workers must be greater than zero")
         self._default_callback = on_ready
         self._size = size
         self._on_callback_error = on_callback_error
@@ -221,6 +228,19 @@ class IconService:
         self._cache: dict[str, IconImage | None] = {}
         self._pending: set[str] = set()
         self._api = _load_native_api() if api == "auto" else api
+        self._work_queue: queue.Queue[
+            tuple[str, str, Callable[[str, IconImage], object] | None] | None
+        ] = queue.Queue()
+        self._workers: list[threading.Thread] = []
+        if self._api is not None:
+            for index in range(max_workers):
+                worker = threading.Thread(
+                    target=self._worker_loop,
+                    name=f"QuickAccessIconWorker-{index + 1}",
+                    daemon=True,
+                )
+                worker.start()
+                self._workers.append(worker)
 
     @property
     def available(self) -> bool:
@@ -244,7 +264,14 @@ class IconService:
             self._pending.add(key)
         resolved_callback = callback or self._default_callback
 
-        def worker() -> None:
+        self._work_queue.put((key, path, resolved_callback))
+
+    def _worker_loop(self) -> None:
+        while True:
+            request = self._work_queue.get()
+            if request is None:
+                return
+            key, path, resolved_callback = request
             image = self._extract(path)
             with self._lock:
                 self._cache[key] = image
@@ -258,12 +285,6 @@ class IconService:
                             self._on_callback_error(error)
                         except Exception:
                             pass
-
-        threading.Thread(
-            target=worker,
-            name=f"QuickAccessIcon-{key.strip(chr(0))}",
-            daemon=True,
-        ).start()
 
     def _extract(self, path: str) -> IconImage | None:
         try:

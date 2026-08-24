@@ -40,7 +40,7 @@ class TrayState(str, Enum):
 
 
 def create_tray_icon(size: int = 64) -> Image.Image:
-    """Generate the shared Park Jin-Su signature tray bitmap."""
+    """Generate the shared QuickAccess brand tray bitmap."""
 
     return create_brand_icon(size).copy()
 

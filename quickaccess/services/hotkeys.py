@@ -11,7 +11,7 @@ import queue
 import sys
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeAlias
 
 
@@ -364,6 +364,15 @@ class _RegistrationManager:
                 removed.append(registration)
         except Exception as error:
             rollback_ok = self._register_all(removed)
+            if rollback_ok:
+                self.registrations = old
+            else:
+                removed_ids = {registration.hotkey_id for registration in removed}
+                self.registrations = tuple(
+                    registration
+                    for registration in old
+                    if registration.hotkey_id not in removed_ids
+                )
             raise HotkeyRegistrationError(
                 f"could not replace existing hotkeys: {error}",
                 rollback_succeeded=rollback_ok,
@@ -389,13 +398,16 @@ class _RegistrationManager:
         self.registrations = tuple(registered)
 
     def clear(self) -> None:
-        registrations, self.registrations = self.registrations, ()
+        registrations = self.registrations
+        remaining: list[_Registration] = []
         errors: list[Exception] = []
         for registration in registrations:
             try:
                 self.api.unregister(registration.hotkey_id)
             except Exception as error:
                 errors.append(error)
+                remaining.append(registration)
+        self.registrations = tuple(remaining)
         if errors:
             raise HotkeyRegistrationError(f"failed to unregister hotkeys: {errors[0]}")
 
@@ -451,6 +463,9 @@ class _Command:
     done: threading.Event | None = None
     result: object = None
     error: BaseException | None = None
+    cancelled: bool = False
+    completed: bool = False
+    state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 class NativeHotkeyService:
@@ -548,13 +563,20 @@ class NativeHotkeyService:
             try:
                 self._api.post(self._thread_id, _WM_COMMAND)
             except Exception:
-                try:
-                    self._commands.get_nowait()
-                except queue.Empty:
-                    pass
+                # The queue may already contain an older timed-out command, so
+                # blindly popping its head could remove the wrong operation.
+                # Mark this exact command as cancelled; if another message
+                # eventually wakes the pump it will be skipped safely.
+                with command.state_lock:
+                    command.cancelled = True
                 raise
-            if command.done is None or not command.done.wait(self._command_timeout):
-                raise HotkeyUnavailableError("hotkey command timed out")
+            if command.done is None:
+                raise HotkeyUnavailableError("hotkey command has no completion event")
+            if not command.done.wait(self._command_timeout):
+                with command.state_lock:
+                    if not command.completed:
+                        command.cancelled = True
+                        raise HotkeyUnavailableError("hotkey command timed out")
             if command.error is not None:
                 raise command.error
             return command.result
@@ -606,10 +628,7 @@ class NativeHotkeyService:
                 break
             try:
                 if command.operation == "configure":
-                    manager.apply(command.payload)
-                    command.result = manager.snapshot()
-                    with self._state_lock:
-                        self._snapshot = dict(command.result)
+                    self._apply_configure_command(manager, command)
                 elif command.operation == "stop":
                     # Exit the pump even if native cleanup reports an error;
                     # the thread-level finally block makes one more cleanup pass.
@@ -622,13 +641,49 @@ class NativeHotkeyService:
                     raise HotkeyError(f"unknown hotkey command: {command.operation}")
             except BaseException as error:
                 command.error = error
+            finally:
                 if command.operation == "configure":
                     with self._state_lock:
                         self._snapshot = manager.snapshot()
-            finally:
+                with command.state_lock:
+                    command.completed = True
                 if command.done is not None:
                     command.done.set()
         return stop_requested
+
+    def _apply_configure_command(
+        self,
+        manager: _RegistrationManager,
+        command: _Command,
+    ) -> None:
+        """Apply a binding set only while its waiting caller still accepts it."""
+
+        with command.state_lock:
+            if command.cancelled:
+                raise HotkeyUnavailableError("hotkey command was cancelled")
+
+        previous = tuple(
+            registration.binding for registration in manager.registrations
+        )
+        manager.apply(command.payload)
+
+        with command.state_lock:
+            if not command.cancelled:
+                command.result = manager.snapshot()
+                command.completed = True
+                return
+
+        # The native call crossed the caller's deadline.  Restore the exact
+        # binding set that was active when this command began rather than
+        # allowing a reported failure to mutate global hotkeys later.
+        try:
+            manager.apply(previous)
+        except Exception as error:
+            raise HotkeyRegistrationError(
+                f"timed-out hotkey command could not be rolled back: {error}",
+                rollback_succeeded=False,
+            ) from error
+        raise HotkeyUnavailableError("hotkey command timed out and was rolled back")
 
     def _run_callback(self, callback: Callable[[], object]) -> None:
         try:
@@ -647,6 +702,8 @@ class NativeHotkeyService:
             except queue.Empty:
                 return
             command.error = error
+            with command.state_lock:
+                command.completed = True
             if command.done is not None:
                 command.done.set()
 

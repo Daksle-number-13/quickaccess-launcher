@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from quickaccess.services.hotkeys import (
     HotkeyBinding,
     HotkeyParseError,
     HotkeyRegistrationError,
+    HotkeyUnavailableError,
     NativeHotkeyService,
     _RegistrationManager,
     describe_hotkey_conflict_risk,
@@ -113,6 +115,42 @@ class RegistrationTransactionTests(unittest.TestCase):
         self.assertEqual((api.register_calls, api.unregister_calls), calls)
         self.assertIs(manager.callback_for(next(iter(api.registered))), replacement_callback)
 
+    def test_failed_unregister_rollback_reports_only_native_bindings_that_remain(
+        self,
+    ) -> None:
+        api = _FakeRegistrationApi()
+        manager = _RegistrationManager(api)
+        old = prepare_bindings(
+            {
+                "panel": ("ctrl+alt+q", lambda: None),
+                "quick_add": ("ctrl+alt+w", lambda: None),
+            }
+        )
+        manager.apply(old)
+        second_id = max(api.registered)
+        original_unregister = api.unregister
+
+        def fail_second_unregister(hotkey_id: int) -> None:
+            if hotkey_id == second_id:
+                raise OSError("simulated unregister failure")
+            original_unregister(hotkey_id)
+
+        api.unregister = fail_second_unregister  # type: ignore[method-assign]
+        api.fail_identity = old[0].hotkey.identity
+        replacement = prepare_bindings(
+            {
+                "panel": ("ctrl+alt+e", lambda: None),
+                "quick_add": ("ctrl+alt+r", lambda: None),
+            }
+        )
+
+        with self.assertRaises(HotkeyRegistrationError) as caught:
+            manager.apply(replacement)
+
+        self.assertFalse(caught.exception.rollback_succeeded)
+        self.assertEqual({second_id: old[1].hotkey.identity}, api.registered)
+        self.assertEqual({"quick_add": "ctrl+alt+w"}, manager.snapshot())
+
 
 class _FakeMessageApi(_FakeRegistrationApi):
     def __init__(self) -> None:
@@ -135,6 +173,16 @@ class _FakeMessageApi(_FakeRegistrationApi):
 class _FailingUnregisterMessageApi(_FakeMessageApi):
     def unregister(self, hotkey_id: int) -> None:
         raise OSError("simulated native cleanup failure")
+
+
+class _SlowRegisterMessageApi(_FakeMessageApi):
+    def __init__(self, delay: float) -> None:
+        super().__init__()
+        self.delay = delay
+
+    def register(self, hotkey_id: int, hotkey: object) -> None:
+        time.sleep(self.delay)
+        super().register(hotkey_id, hotkey)
 
 
 class NativeHotkeyServiceTests(unittest.TestCase):
@@ -161,6 +209,26 @@ class NativeHotkeyServiceTests(unittest.TestCase):
         service.configure({"panel": ("ctrl+space", lambda: None)})
         service.stop()
         self.assertFalse(service.running)
+
+    def test_timed_out_configuration_is_rolled_back_instead_of_applying_late(self) -> None:
+        api = _SlowRegisterMessageApi(delay=0.15)
+        service = NativeHotkeyService(api_factory=lambda: api, command_timeout=0.03)
+        try:
+            with self.assertRaisesRegex(HotkeyUnavailableError, "timed out"):
+                service.configure({"panel": ("ctrl+alt+q", lambda: None)})
+
+            deadline = time.monotonic() + 1.0
+            while (service.bindings or api.registered) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            # The worker can still be inside the delayed native call when the
+            # timeout is raised, so also wait until that call has had time to
+            # finish and perform its compensating rollback.
+            time.sleep(0.2)
+            self.assertEqual({}, service.bindings)
+            self.assertEqual({}, api.registered)
+        finally:
+            service._command_timeout = 1.0
+            service.stop()
 
 
 if __name__ == "__main__":

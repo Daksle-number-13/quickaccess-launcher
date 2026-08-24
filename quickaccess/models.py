@@ -25,6 +25,8 @@ DEFAULT_APPEARANCE_MODE: AppearanceMode = "system"
 DEFAULT_COLUMNS = 3
 MIN_COLUMNS = 2
 MAX_COLUMNS = 5
+_FOLDERID_DOWNLOADS = "374DE290-123F-4565-9164-39C4925E467B"
+_FOLDERID_DOCUMENTS = "FDD39AD0-238F-46AF-ADB4-6C85480369C7"
 
 
 def _new_id() -> str:
@@ -53,6 +55,60 @@ def detect_item_type(path: str | os.PathLike[str]) -> ItemType:
         return "folder" if os.path.isdir(os.fspath(path)) else "file"
     except (OSError, TypeError, ValueError):
         return "file"
+
+
+def _migrate_item_type(path: str) -> ItemType:
+    """Classify legacy data without touching a potentially blocking path."""
+
+    try:
+        if urlsplit(path).scheme.lower() in ("http", "https"):
+            return "url"
+    except ValueError:
+        pass
+    return "file"
+
+
+def _known_folder_path(folder_id: str) -> Path | None:
+    """Resolve a redirected Windows known folder, falling back safely."""
+
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_ulong),
+                ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        raw = uuid.UUID(folder_id).bytes_le
+        guid = _GUID.from_buffer_copy(raw)
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+        shell32.SHGetKnownFolderPath.argtypes = [
+            ctypes.POINTER(_GUID),
+            wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.POINTER(ctypes.c_wchar_p),
+        ]
+        shell32.SHGetKnownFolderPath.restype = ctypes.c_long
+        ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+        path_pointer = ctypes.c_wchar_p()
+        result = shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid), 0, None, ctypes.byref(path_pointer)
+        )
+        if result != 0 or not path_pointer.value:
+            return None
+        try:
+            return Path(path_pointer.value)
+        finally:
+            ole32.CoTaskMemFree(path_pointer)
+    except Exception:
+        return None
 
 
 def normalize_web_url(value: str | os.PathLike[str]) -> str:
@@ -143,7 +199,7 @@ class LauncherItem:
         self.name = _optional_text(self.name) or _display_name(self.path)
         self.id = _optional_text(self.id) or _new_id()
         if self.type not in ("folder", "file", "url"):
-            self.type = detect_item_type(self.path)
+            self.type = _migrate_item_type(self.path)
         if self.type == "url":
             self.path = normalize_web_url(self.path)
         self.order = _coerce_order(self.order, 0)
@@ -164,7 +220,7 @@ class LauncherItem:
 
         item_type = data.get("type")
         if item_type not in ("folder", "file", "url"):
-            item_type = detect_item_type(path)
+            item_type = _migrate_item_type(path)
 
         return cls(
             id=_optional_text(data.get("id")) or _new_id(),
@@ -210,20 +266,24 @@ class LauncherConfig:
         if user_home is None:
             profile = os.environ.get("USERPROFILE")
             home = Path(profile) if profile else Path.home()
+            downloads = _known_folder_path(_FOLDERID_DOWNLOADS) or home / "Downloads"
+            documents = _known_folder_path(_FOLDERID_DOCUMENTS) or home / "Documents"
         else:
             home = Path(user_home)
+            downloads = home / "Downloads"
+            documents = home / "Documents"
 
         return cls(
             items=[
                 LauncherItem(
                     name="다운로드",
-                    path=str(home / "Downloads"),
+                    path=str(downloads),
                     type="folder",
                     order=0,
                 ),
                 LauncherItem(
                     name="문서",
-                    path=str(home / "Documents"),
+                    path=str(documents),
                     type="folder",
                     order=1,
                 ),

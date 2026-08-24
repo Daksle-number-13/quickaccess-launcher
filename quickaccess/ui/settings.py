@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import ntpath
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox
 from urllib.parse import urlsplit
 
@@ -24,6 +25,7 @@ from .theme import (
     DANGER,
     DANGER_HOVER,
     DANGER_SOFT,
+    FONT_FAMILY,
     MUTED,
     SURFACE,
     SURFACE_ALT,
@@ -72,14 +74,6 @@ def settings_dimensions(work_area_width: int, work_area_height: int, scale: floa
     return width, height
 
 
-def _ellipsize_middle(value: str, limit: int) -> str:
-    if len(value) <= limit:
-        return value
-    head = max(1, (limit - 1) // 2)
-    tail = max(1, limit - head - 1)
-    return f"{value[:head]}…{value[-tail:]}"
-
-
 @dataclass(frozen=True, slots=True)
 class SettingsActions:
     get_config: Callable[[], LauncherConfig]
@@ -104,7 +98,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._actions = actions
         self._refreshing = False
         self._active_page = "items"
+        self._compact = False
         self._ultra_compact = False
+        self._item_text_width = 420
+        self._measurement_fonts: dict[tuple[int, str, float], tkfont.Font] = {}
+        self._hotkeys_dirty = False
+        self._item_action_buttons: list[ctk.CTkButton] = []
         self._items_signature: tuple[object, ...] | None = None
 
         self.title("QuickAccess")
@@ -129,7 +128,175 @@ class SettingsWindow(ctk.CTkToplevel):
         # scrollbar itself on Windows.  Route wheel input at the toplevel so
         # the currently visible settings pane always scrolls.
         self.bind("<MouseWheel>", self._on_mouse_wheel, add="+")
+        self.bind("<Tab>", self._cycle_keyboard_focus, add="+")
+        self.bind(
+            "<Shift-Tab>",
+            lambda event: self._cycle_keyboard_focus(event, reverse=True),
+            add="+",
+        )
         self.refresh()
+
+    @staticmethod
+    def _focus_target(widget: ctk.CTkBaseClass) -> tk.Misc | None:
+        target = getattr(widget, "_canvas", None)
+        return target if isinstance(target, tk.Misc) else None
+
+    def _enable_keyboard_button(self, button: ctk.CTkButton) -> None:
+        """Make a CustomTkinter button participate in normal Tab traversal."""
+
+        target = self._focus_target(button)
+        if target is None:
+            return
+        target.configure(takefocus=button.cget("state") != "disabled")
+        resting_border_width = int(button.cget("border_width"))
+        resting_border_color = button.cget("border_color")
+
+        def activate(_event: tk.Event[tk.Misc]) -> str:
+            button.invoke()
+            return "break"
+
+        button.bind("<Return>", activate, add="+")
+        button.bind("<space>", activate, add="+")
+        button.bind(
+            "<FocusIn>",
+            lambda _event: button.configure(border_width=2, border_color=ACCENT),
+            add="+",
+        )
+        button.bind(
+            "<FocusOut>",
+            lambda _event: button.configure(
+                border_width=resting_border_width,
+                border_color=resting_border_color,
+            ),
+            add="+",
+        )
+
+    def _enable_keyboard_switch(self, switch: ctk.CTkSwitch) -> None:
+        target = self._focus_target(switch)
+        if target is None:
+            return
+        target.configure(takefocus=True)
+        resting_border_width = int(switch.cget("border_width"))
+        resting_border_color = switch.cget("border_color")
+
+        def toggle(_event: tk.Event[tk.Misc]) -> str:
+            switch.toggle()
+            return "break"
+
+        switch.bind("<Return>", toggle, add="+")
+        switch.bind("<space>", toggle, add="+")
+        switch.bind(
+            "<FocusIn>",
+            lambda _event: switch.configure(border_width=2, border_color=ACCENT),
+            add="+",
+        )
+        switch.bind(
+            "<FocusOut>",
+            lambda _event: switch.configure(
+                border_width=resting_border_width,
+                border_color=resting_border_color,
+            ),
+            add="+",
+        )
+
+    def _enable_segmented_keyboard(self, segmented: ctk.CTkSegmentedButton) -> None:
+        for button in segmented._buttons_dict.values():
+            self._enable_keyboard_button(button)
+
+    def _keyboard_targets(self) -> list[tk.Misc]:
+        widgets: list[ctk.CTkBaseClass] = list(self._nav_buttons.values())
+        if self._active_page == "items":
+            widgets.extend(
+                (
+                    self._add_folder_button,
+                    self._add_file_button,
+                    self._add_link_button,
+                )
+            )
+            widgets.extend(self._item_action_buttons)
+        else:
+            widgets.extend(self._appearance._buttons_dict.values())
+            widgets.extend(self._columns._buttons_dict.values())
+
+        targets = [
+            target
+            for widget in widgets
+            if (target := self._focus_target(widget)) is not None
+            and str(widget.cget("state")) != "disabled"
+        ]
+        if self._active_page == "preferences":
+            targets.extend(
+                (
+                    self._panel_hotkey._entry,
+                    self._quick_hotkey._entry,
+                )
+            )
+            for widget in (
+                self._apply_hotkeys_button,
+                self._startup,
+                self._updates,
+            ):
+                target = self._focus_target(widget)
+                if target is not None:
+                    targets.append(target)
+        return targets
+
+    def _cycle_keyboard_focus(
+        self,
+        _event: tk.Event[tk.Misc],
+        *,
+        reverse: bool = False,
+    ) -> str:
+        targets = self._keyboard_targets()
+        if not targets:
+            return "break"
+        focused = self.focus_get()
+        try:
+            current = targets.index(focused) if focused is not None else (-1 if not reverse else 0)
+        except ValueError:
+            current = -1 if not reverse else 0
+        offset = -1 if reverse else 1
+        targets[(current + offset) % len(targets)].focus_set()
+        return "break"
+
+    def _ellipsize_to_width(
+        self,
+        value: str,
+        max_width: int,
+        *,
+        size: int,
+        weight: str = "normal",
+    ) -> str:
+        """Middle-ellipsize using the rendered font width, not character count."""
+
+        scale = max(0.1, float(self._get_window_scaling()))
+        key = (size, weight, round(scale, 3))
+        measurement_font = self._measurement_fonts.get(key)
+        if measurement_font is None:
+            measurement_font = tkfont.Font(
+                root=self,
+                family=FONT_FAMILY,
+                size=-max(1, round(size * scale)),
+                weight=weight,
+            )
+            self._measurement_fonts[key] = measurement_font
+        available = max(1, round(max_width * scale))
+        if measurement_font.measure(value) <= available:
+            return value
+
+        low, high = 0, len(value)
+        best = "…"
+        while low <= high:
+            retained = (low + high) // 2
+            head = (retained + 1) // 2
+            tail = retained // 2
+            candidate = value[:head] + "…" + (value[-tail:] if tail else "")
+            if measurement_font.measure(candidate) <= available:
+                best = candidate
+                low = retained + 1
+            else:
+                high = retained - 1
+        return best
 
     def _on_mouse_wheel(self, event: tk.Event[tk.Misc]) -> str | None:
         delta = int(getattr(event, "delta", 0))
@@ -263,6 +430,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=command,
         )
         button.grid(row=row, column=0, padx=14, pady=3, sticky="ew")
+        self._enable_keyboard_button(button)
         return button
 
     def _build_items_page(self) -> None:
@@ -309,6 +477,7 @@ class SettingsWindow(ctk.CTkToplevel):
             rowspan=2,
             padx=(12, 8),
         )
+        self._enable_keyboard_button(self._add_folder_button)
         self._add_file_button = ctk.CTkButton(
             header,
             text="＋  파일 추가",
@@ -322,6 +491,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._add_file,
         )
         self._add_file_button.grid(row=0, column=2, rowspan=2)
+        self._enable_keyboard_button(self._add_file_button)
         self._add_link_button = ctk.CTkButton(
             header,
             text="＋  웹 링크",
@@ -335,6 +505,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._add_link,
         )
         self._add_link_button.grid(row=0, column=3, rowspan=2, padx=(8, 0))
+        self._enable_keyboard_button(self._add_link_button)
 
         list_card = ctk.CTkFrame(
             page,
@@ -447,6 +618,7 @@ class SettingsWindow(ctk.CTkToplevel):
             pady=16,
             sticky="e",
         )
+        self._enable_segmented_keyboard(self._appearance)
 
         layout = self._settings_card(
             scroll,
@@ -469,6 +641,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._columns_changed,
         )
         self._columns.grid(row=0, column=1, rowspan=2, padx=18, pady=16, sticky="e")
+        self._enable_segmented_keyboard(self._columns)
 
         hotkeys = self._settings_card(
             scroll,
@@ -485,8 +658,8 @@ class SettingsWindow(ctk.CTkToplevel):
         fields.grid_columnconfigure(1, weight=1)
         self._panel_hotkey = self._hotkey_field(fields, 0, "패널 열기")
         self._quick_hotkey = self._hotkey_field(fields, 1, "탐색기에서 빠른 등록")
-        self._panel_hotkey.bind("<KeyRelease>", self._update_hotkey_warning, add="+")
-        self._quick_hotkey.bind("<KeyRelease>", self._update_hotkey_warning, add="+")
+        self._panel_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
+        self._quick_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
         self._apply_hotkeys_button = ctk.CTkButton(
             fields,
             text="변경사항 적용",
@@ -499,6 +672,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._apply_hotkeys,
         )
         self._apply_hotkeys_button.grid(row=2, column=1, pady=(12, 0), sticky="e")
+        self._enable_keyboard_button(self._apply_hotkeys_button)
         self._hotkey_warning = ctk.CTkLabel(
             fields,
             text="",
@@ -537,6 +711,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._startup_changed,
         )
         self._startup.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
+        self._enable_keyboard_switch(self._startup)
 
         updates = self._settings_card(
             scroll,
@@ -556,6 +731,7 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._updates_changed,
         )
         self._updates.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
+        self._enable_keyboard_switch(self._updates)
 
     def _settings_card(
         self,
@@ -634,6 +810,7 @@ class SettingsWindow(ctk.CTkToplevel):
             pady=(5, 0),
             sticky="ew",
         )
+        entry._entry.configure(takefocus=True)
         if not hasattr(self, "_hotkey_labels"):
             self._hotkey_labels: list[ctk.CTkLabel] = []
         self._hotkey_labels.append(label_widget)
@@ -711,12 +888,26 @@ class SettingsWindow(ctk.CTkToplevel):
     def _apply_compact_layout(self, logical_width: int) -> None:
         compact = logical_width < 800
         ultra_compact = logical_width < 520
-        needs_refresh = ultra_compact != self._ultra_compact
+        previous_item_layout = (self._ultra_compact, self._item_text_width)
+        self._compact = compact
         self._ultra_compact = ultra_compact
         self._hotkey_warning.configure(
             wraplength=170 if ultra_compact else (300 if compact else 420)
         )
         sidebar_width = 104 if ultra_compact else (160 if compact else SIDEBAR_WIDTH)
+        page_padding = 8 if ultra_compact else (16 if compact else 28)
+        estimated_row_width = max(
+            120,
+            logical_width - sidebar_width - page_padding * 2 - 28,
+        )
+        # In the ultra-compact layout row actions move below the labels.  At
+        # wider breakpoints they stay in the same row and need their own room.
+        reserved_width = 84 if ultra_compact else 245
+        self._item_text_width = max(64, estimated_row_width - reserved_width)
+        needs_refresh = previous_item_layout != (
+            self._ultra_compact,
+            self._item_text_width,
+        )
         self.grid_columnconfigure(0, minsize=sidebar_width)
         self._sidebar.configure(width=sidebar_width)
         self._brand.grid_configure(padx=8 if ultra_compact else (12 if compact else 20))
@@ -899,7 +1090,6 @@ class SettingsWindow(ctk.CTkToplevel):
             )
             self._layout_hotkeys_for_normal_width()
 
-        page_padding = 8 if ultra_compact else (16 if compact else 28)
         self._items_header.grid_configure(
             padx=page_padding,
             pady=(18 if compact else 26, 12 if compact else 18),
@@ -1002,6 +1192,7 @@ class SettingsWindow(ctk.CTkToplevel):
             ordered_items = sorted(config.items, key=lambda value: value.order)
             items_signature: tuple[object, ...] = (
                 self._ultra_compact,
+                self._item_text_width,
                 tuple(
                     (item.id, item.name, item.path, item.type, item.order)
                     for item in ordered_items
@@ -1010,6 +1201,7 @@ class SettingsWindow(ctk.CTkToplevel):
             if items_signature != self._items_signature:
                 for child in self._list.winfo_children():
                     child.destroy()
+                self._item_action_buttons = []
                 for row, item in enumerate(ordered_items):
                     self._add_item_row(row, item, len(ordered_items))
                 if not ordered_items:
@@ -1025,8 +1217,9 @@ class SettingsWindow(ctk.CTkToplevel):
             )
             self._startup_variable.set(config.run_on_startup)
             self._updates_variable.set(config.check_updates)
-            self._replace_entry(self._panel_hotkey, config.hotkey)
-            self._replace_entry(self._quick_hotkey, config.quick_add_hotkey)
+            if not self._hotkeys_dirty:
+                self._replace_entry(self._panel_hotkey, config.hotkey)
+                self._replace_entry(self._quick_hotkey, config.quick_add_hotkey)
             self._update_hotkey_warning()
         finally:
             self._refreshing = False
@@ -1042,6 +1235,11 @@ class SettingsWindow(ctk.CTkToplevel):
             self._hotkey_warning.grid()
         else:
             self._hotkey_warning.grid_remove()
+
+    def _hotkey_edited(self, event: tk.Event[tk.Misc] | None = None) -> None:
+        if not self._refreshing:
+            self._hotkeys_dirty = True
+        self._update_hotkey_warning(event)
 
     def _add_empty_state(self) -> None:
         empty = ctk.CTkFrame(self._list, fg_color="transparent")
@@ -1084,7 +1282,7 @@ class SettingsWindow(ctk.CTkToplevel):
             border_color=BORDER,
         )
         card.grid(row=row, column=0, padx=2, pady=4, sticky="ew")
-        card.grid_columnconfigure(1, weight=1)
+        card.grid_columnconfigure(1, weight=1, minsize=0)
 
         is_folder = item.type == "folder"
         item_icon = ICON_LINK if item.type == "url" else (ICON_FOLDER if is_folder else ICON_FILE)
@@ -1100,16 +1298,25 @@ class SettingsWindow(ctk.CTkToplevel):
         ).grid(row=0, column=0, rowspan=2, padx=(12, 11), pady=11)
         ctk.CTkLabel(
             card,
-            text=_ellipsize_middle(item.name, 34),
-            width=1,
+            text=self._ellipsize_to_width(
+                item.name,
+                self._item_text_width,
+                size=12,
+                weight="bold",
+            ),
+            width=self._item_text_width,
             font=font(12, "bold"),
             text_color=TEXT,
             anchor="w",
         ).grid(row=0, column=1, pady=(11, 1), sticky="sew")
         ctk.CTkLabel(
             card,
-            text=_ellipsize_middle(item.path, 52),
-            width=1,
+            text=self._ellipsize_to_width(
+                item.path,
+                self._item_text_width,
+                size=9,
+            ),
+            width=self._item_text_width,
             font=font(9),
             text_color=MUTED,
             anchor="w",
@@ -1169,7 +1376,7 @@ class SettingsWindow(ctk.CTkToplevel):
         use_icon_font: bool = False,
         state: str = "normal",
     ) -> None:
-        ctk.CTkButton(
+        button = ctk.CTkButton(
             parent,
             text=text,
             width=48 if text == "수정" else 34,
@@ -1182,7 +1389,10 @@ class SettingsWindow(ctk.CTkToplevel):
             font=icon_font(15) if use_icon_font else font(10, "bold"),
             state=state,
             command=command,
-        ).grid(row=0, column=column, rowspan=2, padx=(0, 5), pady=14)
+        )
+        button.grid(row=0, column=column, rowspan=2, padx=(0, 5), pady=14)
+        self._enable_keyboard_button(button)
+        self._item_action_buttons.append(button)
 
     def _choose_and_add(self, path: str, item_type: str) -> None:
         if not path:
@@ -1287,10 +1497,12 @@ class SettingsWindow(ctk.CTkToplevel):
             self.refresh()
 
     def _apply_hotkeys(self) -> None:
-        self._actions.set_hotkeys(
+        applied = self._actions.set_hotkeys(
             self._panel_hotkey.get().strip(),
             self._quick_hotkey.get().strip(),
         )
+        if applied:
+            self._hotkeys_dirty = False
         self.refresh()
 
     @staticmethod

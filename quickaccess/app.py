@@ -63,6 +63,8 @@ from .ui.settings import SettingsActions, SettingsWindow
 LOGGER = logging.getLogger(__name__)
 MUTEX_NAME = "QuickAccessLauncher-2D6B7C9A-0145-4D80-A84C-8297515C16B2"
 PUMP_INTERVAL_MS = 16
+QUICK_ADD_TIMEOUT_MS = 8000
+MAX_CONCURRENT_LAUNCHES = 4
 CTK_APPEARANCE_MODES = {
     "system": "System",
     "light": "Light",
@@ -129,7 +131,14 @@ class QuickAccessApp:
         self._last_work_area: Rect | None = None
         self._stopping = False
         self._quick_add_inflight = False
+        self._quick_add_generation = 0
+        self._quick_add_timeout_after: str | None = None
+        self._launch_inflight: set[str] = set()
+        self._launch_slots = threading.BoundedSemaphore(MAX_CONCURRENT_LAUNCHES)
         self._popup_refresh_after: str | None = None
+        self._update_check_after: str | None = None
+        self._update_check_generation = 0
+        self._update_check_inflight_generations: set[int] = set()
 
         self.root.withdraw()
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
@@ -142,6 +151,12 @@ class QuickAccessApp:
         # renamed, independently of the opt-in network update setting.
         if not self.smoke_test:
             self._synchronize_startup_registration()
+
+        # Finish the one expensive widget-tree build before the global
+        # hotkeys become available.  Startup may take a little longer, but
+        # once Ctrl+Space can be received its popup is already realized and
+        # the display path never races an idle-time cold render.
+        self._prewarm_popup()
 
         hotkey_ready = self._configure_hotkeys(
             self.config.hotkey,
@@ -169,14 +184,12 @@ class QuickAccessApp:
         if not self.smoke_test and self.config.check_updates:
             # Delayed well past startup so a slow or firewalled network call
             # never competes with hotkey/tray registration for attention.
-            self.root.after(5000, self._check_for_update)
-        # Build the hidden launcher cards while the resident app is settling.
-        # The first hotkey press can then reuse the ready widget tree instead
-        # of constructing dozens of Tk widgets on the critical display path.
-        self.root.after(120, self._prewarm_popup)
-
+            self._schedule_update_check(5000)
         if self.load_result.recovered:
-            message = "설정 파일이 손상되어 기본값으로 복구했습니다."
+            if getattr(self.load_result, "restored_from_backup", False):
+                message = "설정 파일이 손상되어 이전 백업으로 복구했습니다."
+            else:
+                message = "설정 파일이 손상되어 기본값으로 복구했습니다."
             if self.load_result.backup_path is not None:
                 message += f"\n백업: {self.load_result.backup_path.name}"
             self.root.after(350, lambda: self.toast.show(message, kind="warning", duration_ms=5500))
@@ -552,14 +565,44 @@ class QuickAccessApp:
     def set_update_checks(self, enabled: bool) -> bool:
         """Persist the explicit consent controlling GitHub release checks."""
 
+        previous = self.config.check_updates
         if not self._commit(
             lambda config: setattr(config, "check_updates", bool(enabled)),
             "업데이트 확인 설정을 저장하지 못했습니다",
         ):
             return False
+
+        if bool(enabled) != previous:
+            # Every opt-in period gets its own generation.  A result from a
+            # worker started before opt-out must remain stale even if the user
+            # opts in again before that old request finishes.
+            self._update_check_generation += 1
+
         if enabled:
             self._check_for_update()
+        else:
+            self._cancel_update_check_schedule()
         return True
+
+    def _schedule_update_check(self, delay_ms: int) -> None:
+        self._cancel_update_check_schedule()
+        self._update_check_after = self.root.after(
+            max(0, int(delay_ms)),
+            self._run_scheduled_update_check,
+        )
+
+    def _run_scheduled_update_check(self) -> None:
+        self._update_check_after = None
+        self._check_for_update()
+
+    def _cancel_update_check_schedule(self) -> None:
+        after_id, self._update_check_after = self._update_check_after, None
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
 
     def _synchronize_startup_registration(self) -> None:
         executable, arguments = startup_invocation()
@@ -597,26 +640,50 @@ class QuickAccessApp:
             )
 
     def activate_item(self, item_id: str) -> None:
+        if item_id in self._launch_inflight:
+            return
         try:
             item = self.config.get_item(item_id)
         except KeyError:
             return
+        if not self._launch_slots.acquire(blocking=False):
+            self.toast.show(
+                "열기 작업이 많아 잠시 대기 중입니다. 잠시 후 다시 시도해 주세요.",
+                kind="warning",
+            )
+            return
         item_name = item.name
         item_path = item.path
+        self._launch_inflight.add(item_id)
 
         def worker() -> None:
-            result = self.launcher.launch(item_path)
-            self._safe_publish(
-                LaunchResultCommand(item_name=item_name, result=result)
-            )
+            try:
+                result = self.launcher.launch(item_path)
+                self._safe_publish(
+                    LaunchResultCommand(item_name=item_name, result=(item_id, result))
+                )
+            finally:
+                self._launch_slots.release()
 
-        threading.Thread(
-            target=worker,
-            name=f"QuickAccessLaunch-{item.id}",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=worker,
+                name=f"QuickAccessLaunch-{item.id}",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._launch_inflight.discard(item_id)
+            self._launch_slots.release()
+            raise
 
     def _finish_launch(self, item_name: str, result: object) -> None:
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], str)
+        ):
+            item_id, result = result
+            self._launch_inflight.discard(item_id)
         if isinstance(result, LaunchResult) and not result.success:
             self.toast.show(
                 f"'{item_name}'을(를) 열지 못했습니다: {result.error or '알 수 없는 오류'}",
@@ -738,44 +805,86 @@ class QuickAccessApp:
     def _refresh_visible_popup(self) -> None:
         if self._popup_refresh_after is not None:
             return
-        if self.popup is None or not self.popup.visible:
-            return
         self._popup_refresh_after = self.root.after_idle(self._flush_popup_refresh)
 
     def _flush_popup_refresh(self) -> None:
         self._popup_refresh_after = None
-        if (
-            self._stopping
-            or self.popup is None
-            or not self.popup.visible
-            or self._last_anchor is None
-            or self._last_work_area is None
-        ):
+        if self._stopping:
             return
-        self.popup.show(
-            self.config,
-            self.statuses,
-            self._last_anchor,
-            self._last_work_area,
-            icons=self.icon_images,
-        )
+        if (
+            self.popup is not None
+            and self.popup.visible
+            and self._last_anchor is not None
+            and self._last_work_area is not None
+        ):
+            self.popup.show(
+                self.config,
+                self.statuses,
+                self._last_anchor,
+                self._last_work_area,
+                icons=self.icon_images,
+            )
+            return
+        self._prewarm_popup()
 
     def _begin_quick_add(self, explorer_hwnd: int | None) -> None:
         if self._quick_add_inflight:
             return
         self._quick_add_inflight = True
+        self._quick_add_generation += 1
+        generation = self._quick_add_generation
+        self._quick_add_timeout_after = self.root.after(
+            QUICK_ADD_TIMEOUT_MS,
+            lambda: self._expire_quick_add(generation),
+        )
 
         def worker() -> None:
             result = self.explorer.get_target(explorer_hwnd)
-            self._safe_publish(QuickAddResultCommand(result=result))
+            self._safe_publish(QuickAddResultCommand(result=(generation, result)))
 
-        threading.Thread(
-            target=worker,
-            name="QuickAccessExplorerQuickAdd",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=worker,
+                name="QuickAccessExplorerQuickAdd",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._cancel_quick_add_timeout()
+            self._quick_add_inflight = False
+            self._quick_add_generation += 1
+            raise
+
+    def _expire_quick_add(self, generation: int) -> None:
+        if generation != self._quick_add_generation or not self._quick_add_inflight:
+            return
+        self._quick_add_timeout_after = None
+        self._quick_add_inflight = False
+        self._quick_add_generation += 1
+        self.toast.show(
+            "탐색기 응답이 지연되어 빠른 등록을 중단했습니다. 다시 시도해 주세요.",
+            kind="warning",
+        )
+
+    def _cancel_quick_add_timeout(self) -> None:
+        after_id, self._quick_add_timeout_after = self._quick_add_timeout_after, None
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
 
     def _finish_quick_add(self, result: object) -> None:
+        generation = self._quick_add_generation
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], int)
+        ):
+            generation, result = result
+        if generation != self._quick_add_generation or not self._quick_add_inflight:
+            return
+        self._cancel_quick_add_timeout()
         try:
             if not isinstance(result, ExplorerTargetResult) or not result.success or not result.path:
                 message = (
@@ -800,11 +909,19 @@ class QuickAccessApp:
                     self.settings.refresh()
         finally:
             self._quick_add_inflight = False
+            self._quick_add_generation += 1
 
     def _check_for_update(self) -> None:
+        if self._stopping or not self.config.check_updates:
+            return
+        generation = self._update_check_generation
+        if generation in self._update_check_inflight_generations:
+            return
+        self._update_check_inflight_generations.add(generation)
+
         def worker() -> None:
             result = check_for_update(__version__)
-            self._safe_publish(UpdateAvailableCommand(result=result))
+            self._safe_publish(UpdateAvailableCommand(result=(generation, result)))
 
         threading.Thread(
             target=worker,
@@ -813,16 +930,30 @@ class QuickAccessApp:
         ).start()
 
     def _apply_update_check(self, result: object) -> None:
+        generation = self._update_check_generation
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], int)
+        ):
+            generation, result = result
+        self._update_check_inflight_generations.discard(generation)
+        if (
+            generation != self._update_check_generation
+            or not self.config.check_updates
+        ):
+            return
         if not isinstance(result, UpdateCheckResult) or not result.available:
             return
         if not result.latest_version or result.latest_version == self.config.last_update_notice:
             return
         latest_version = result.latest_version
         release_url = result.release_url or f"https://github.com/{DEFAULT_REPO}/releases/latest"
-        self._commit(
+        if not self._commit(
             lambda config: setattr(config, "last_update_notice", latest_version),
             "업데이트 확인 상태를 저장하지 못했습니다",
-        )
+        ):
+            return
         self.toast.show(
             f"새 버전 {latest_version}이(가) 있습니다.",
             kind="info",
@@ -870,6 +1001,8 @@ class QuickAccessApp:
             return
         self._stopping = True
         LOGGER.info("QuickAccess shutdown started")
+        self._cancel_update_check_schedule()
+        self._cancel_quick_add_timeout()
         try:
             self.validator.close()
         except Exception:

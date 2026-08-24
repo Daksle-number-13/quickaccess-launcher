@@ -35,6 +35,15 @@ class IconKeyTests(unittest.TestCase):
             icon_key(r"D:\b\other.xlsx", "file"),
         )
 
+    def test_executables_shortcuts_and_icon_files_use_path_specific_keys(self) -> None:
+        for extension in ("exe", "lnk", "ico"):
+            with self.subTest(extension=extension):
+                first = icon_key(rf"C:\Apps\First.{extension}", "file")
+                same = icon_key(rf"c:\apps\.\FIRST.{extension.upper()}", "file")
+                second = icon_key(rf"C:\Apps\Second.{extension}", "file")
+                self.assertEqual(first, same)
+                self.assertNotEqual(first, second)
+
     def test_extensionless_files_do_not_collide_with_folders(self) -> None:
         self.assertNotEqual(icon_key(r"C:\README", "file"), icon_key(r"C:\A", "folder"))
 
@@ -94,6 +103,34 @@ class IconServiceTests(unittest.TestCase):
         service = IconService(api=api)
         service.request("file", "")
         self.assertEqual([], api.calls)
+
+    def test_requests_use_a_bounded_worker_pool(self) -> None:
+        release = threading.Event()
+        started_lock = threading.Lock()
+        started = 0
+
+        class BlockingApi:
+            def extract(self, path: str, size: int) -> IconImage | None:
+                nonlocal started
+                with started_lock:
+                    started += 1
+                release.wait(1)
+                return None
+
+        service = IconService(api=BlockingApi(), max_workers=2)
+        try:
+            for index in range(20):
+                service.request(str(index), rf"C:\Apps\{index}.exe")
+            deadline = time.monotonic() + 0.5
+            while time.monotonic() < deadline:
+                with started_lock:
+                    if started == 2:
+                        break
+                time.sleep(0.01)
+            with started_lock:
+                self.assertEqual(2, started)
+        finally:
+            release.set()
 
 
 if __name__ == "__main__":

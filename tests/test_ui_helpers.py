@@ -11,6 +11,7 @@ from quickaccess.ui.popup import (
     HEADER_GAP,
     HEADER_HEIGHT,
     PADDING,
+    SCROLLBAR_RESERVE,
     geometry_string,
     grid_navigation_target,
     popup_dimensions,
@@ -72,6 +73,18 @@ class PopupDimensionsTests(unittest.TestCase):
         self.assertLessEqual(width, 624)
         self.assertLessEqual(height, 344)
         self.assertEqual(columns, 4)
+
+    def test_scrolling_popup_reserves_canvas_width_before_choosing_columns(self) -> None:
+        width, height, columns, viewport = popup_dimensions(
+            20,
+            2,
+            Rect(0, 0, 320, 300),
+        )
+
+        self.assertEqual(columns, 1)
+        self.assertEqual(width, PADDING * 2 + BUTTON_WIDTH + SCROLLBAR_RESERVE)
+        self.assertLess(height, 20 * BUTTON_HEIGHT)
+        self.assertEqual(viewport, height - (PADDING * 2 + HEADER_HEIGHT + HEADER_GAP))
 
     def test_empty_state_keeps_a_compact_readable_width(self) -> None:
         width, height, columns, viewport = popup_dimensions(

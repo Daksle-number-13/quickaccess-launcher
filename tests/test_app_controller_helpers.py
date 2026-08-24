@@ -9,6 +9,7 @@ from unittest.mock import patch
 from quickaccess.app import QuickAccessApp
 from quickaccess.commands import CommandBus, LaunchResultCommand
 from quickaccess.models import LauncherConfig
+from quickaccess.services.explorer import ExplorerTargetResult
 from quickaccess.services.launcher import FileLauncher
 from quickaccess.services.update_check import UpdateCheckResult
 
@@ -18,6 +19,9 @@ class _PublishHarness:
         self.config = config
         self.launcher = launcher
         self.bus = CommandBus()
+        self._launch_inflight: set[str] = set()
+        self._launch_slots = threading.BoundedSemaphore(4)
+        self.toast = _ToastRecorder()
 
     def _safe_publish(self, command: object) -> None:
         self.bus.publish(command)  # type: ignore[arg-type]
@@ -148,6 +152,12 @@ class _UpdateCheckHarness:
         self.config = LauncherConfig.default()
         self.toast = _ToastRecorder()
         self.check_calls = 0
+        self._stopping = False
+        self._update_check_after: str | None = None
+        self._update_check_generation = 0
+        self._update_check_inflight_generations: set[int] = set()
+        self.cancelled_after: list[str] = []
+        self.root = self
 
     def _commit(self, mutator: object, _message: str) -> bool:
         mutator(self.config)  # type: ignore[operator]
@@ -156,14 +166,36 @@ class _UpdateCheckHarness:
     def _check_for_update(self) -> None:
         self.check_calls += 1
 
+    def after_cancel(self, after_id: str) -> None:
+        self.cancelled_after.append(after_id)
+
+    def _cancel_update_check_schedule(self) -> None:
+        QuickAccessApp._cancel_update_check_schedule(self)  # type: ignore[arg-type]
+
+
+class _QuickAddWatchdogHarness:
+    def __init__(self) -> None:
+        self._quick_add_inflight = True
+        self._quick_add_generation = 7
+        self._quick_add_timeout_after: str | None = "quick-add-timeout"
+        self.toast = _ToastRecorder()
+
 
 class _StartRootRecorder:
     def __init__(self) -> None:
         self.scheduled: list[tuple[int, object]] = []
+        self.cancelled: list[str] = []
 
     def after(self, delay: int, callback: object) -> str:
         self.scheduled.append((delay, callback))
         return f"after-{len(self.scheduled)}"
+
+    def after_idle(self, callback: object) -> str:
+        self.scheduled.append((-1, callback))
+        return f"idle-{len(self.scheduled)}"
+
+    def after_cancel(self, after_id: str) -> None:
+        self.cancelled.append(after_id)
 
 
 class _ReadyTray:
@@ -194,14 +226,18 @@ class _StartHarness:
         )
         self.startup_sync_calls = 0
         self.update_check_calls = 0
+        self.start_events: list[str] = []
+        self._update_check_after: str | None = None
+        self._update_check_generation = 0
+        self._update_check_inflight_generations: set[int] = set()
 
     def _synchronize_startup_registration(self) -> None:
         self.startup_sync_calls += 1
 
-    @staticmethod
     def _configure_hotkeys(
-        _panel: str, _quick_add: str, *, show_error: bool
+        self, _panel: str, _quick_add: str, *, show_error: bool
     ) -> bool:
+        self.start_events.append("hotkeys")
         return show_error
 
     @staticmethod
@@ -216,12 +252,20 @@ class _StartHarness:
     def _request_all_icons() -> None:
         pass
 
-    @staticmethod
-    def _prewarm_popup() -> None:
-        pass
+    def _prewarm_popup(self) -> None:
+        self.start_events.append("prewarm")
 
     def _check_for_update(self) -> None:
         self.update_check_calls += 1
+
+    def _schedule_update_check(self, delay_ms: int) -> None:
+        QuickAccessApp._schedule_update_check(self, delay_ms)  # type: ignore[arg-type]
+
+    def _run_scheduled_update_check(self) -> None:
+        QuickAccessApp._run_scheduled_update_check(self)  # type: ignore[arg-type]
+
+    def _cancel_update_check_schedule(self) -> None:
+        QuickAccessApp._cancel_update_check_schedule(self)  # type: ignore[arg-type]
 
 
 def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
@@ -233,13 +277,20 @@ def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
 
 
 class ControllerResponsivenessTests(unittest.TestCase):
+    def test_start_prewarms_popup_before_enabling_hotkeys(self) -> None:
+        harness = _StartHarness(check_updates=False)
+
+        QuickAccessApp.start(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(["prewarm", "hotkeys"], harness.start_events)
+
     def test_start_always_reconciles_startup_without_network_opt_in(self) -> None:
         harness = _StartHarness(check_updates=False)
 
         QuickAccessApp.start(harness)  # type: ignore[arg-type]
 
         self.assertEqual(1, harness.startup_sync_calls)
-        self.assertFalse(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertFalse(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(0, harness.update_check_calls)
 
     def test_start_schedules_update_check_only_after_explicit_opt_in(self) -> None:
@@ -248,7 +299,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
         QuickAccessApp.start(harness)  # type: ignore[arg-type]
 
         self.assertEqual(1, harness.startup_sync_calls)
-        self.assertTrue(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertTrue(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(1, harness.update_check_calls)
 
     def test_smoke_start_changes_neither_startup_registry_nor_network(self) -> None:
@@ -257,7 +308,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
         QuickAccessApp.start(harness)  # type: ignore[arg-type]
 
         self.assertEqual(0, harness.startup_sync_calls)
-        self.assertFalse(_run_scheduled_callback(harness, "_check_for_update"))
+        self.assertFalse(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(0, harness.update_check_calls)
 
     def test_update_checks_require_explicit_opt_in(self) -> None:
@@ -276,6 +327,62 @@ class ControllerResponsivenessTests(unittest.TestCase):
         self.assertFalse(harness.config.check_updates)
         self.assertEqual(1, harness.check_calls)
 
+    def test_update_opt_out_cancels_schedule_and_ignores_stale_worker_result(self) -> None:
+        harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
+        harness._update_check_after = "scheduled-check"
+        harness._update_check_inflight_generations.add(0)
+
+        self.assertTrue(
+            QuickAccessApp.set_update_checks(harness, False)  # type: ignore[arg-type]
+        )
+        self.assertEqual(["scheduled-check"], harness.cancelled_after)
+        self.assertEqual(1, harness._update_check_generation)
+
+        QuickAccessApp._apply_update_check(  # type: ignore[arg-type]
+            harness,
+            (
+                0,
+                UpdateCheckResult(
+                    available=True,
+                    latest_version="v9.9.9",
+                    release_url="https://example.invalid/releases/v9.9.9",
+                ),
+            ),
+        )
+
+        self.assertEqual("", harness.config.last_update_notice)
+        self.assertEqual([], harness.toast.messages)
+        self.assertNotIn(0, harness._update_check_inflight_generations)
+
+    def test_update_result_from_previous_opt_in_period_stays_stale_after_reenable(
+        self,
+    ) -> None:
+        harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
+        harness._update_check_generation = 4
+        harness._update_check_inflight_generations.add(3)
+
+        QuickAccessApp._apply_update_check(  # type: ignore[arg-type]
+            harness,
+            (3, UpdateCheckResult(available=True, latest_version="v9.9.9")),
+        )
+
+        self.assertEqual("", harness.config.last_update_notice)
+        self.assertEqual([], harness.toast.messages)
+
+    def test_update_check_deduplicates_workers_within_one_generation(self) -> None:
+        harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
+        harness._safe_publish = lambda _command: None  # type: ignore[attr-defined]
+
+        with patch("quickaccess.app.threading.Thread") as worker_thread:
+            QuickAccessApp._check_for_update(harness)  # type: ignore[arg-type]
+            QuickAccessApp._check_for_update(harness)  # type: ignore[arg-type]
+
+        worker_thread.assert_called_once()
+        worker_thread.return_value.start.assert_called_once_with()
+
     def test_visible_popup_refreshes_are_coalesced_until_idle(self) -> None:
         harness = _PopupRefreshHarness()
 
@@ -285,11 +392,28 @@ class ControllerResponsivenessTests(unittest.TestCase):
         self.assertEqual(len(harness.root.callbacks), 1)
         self.assertEqual(harness._popup_refresh_after, "after-1")
 
+    def test_hidden_popup_refresh_is_applied_during_prewarm(self) -> None:
+        prewarm_calls: list[bool] = []
+        harness = SimpleNamespace(
+            _popup_refresh_after="after-1",
+            _stopping=False,
+            popup=SimpleNamespace(visible=False),
+            _prewarm_popup=lambda: prewarm_calls.append(True),
+        )
+
+        QuickAccessApp._flush_popup_refresh(harness)  # type: ignore[arg-type]
+
+        self.assertIsNone(harness._popup_refresh_after)
+        self.assertEqual([True], prewarm_calls)
+
     def test_activate_item_does_not_block_caller_when_shell_launch_stalls(self) -> None:
         entered = threading.Event()
         release = threading.Event()
+        calls = 0
 
         def blocking_startfile(_path: str) -> None:
+            nonlocal calls
+            calls += 1
             entered.set()
             release.wait(2.0)
 
@@ -299,10 +423,12 @@ class ControllerResponsivenessTests(unittest.TestCase):
 
         started = time.monotonic()
         QuickAccessApp.activate_item(harness, item.id)  # type: ignore[arg-type]
+        QuickAccessApp.activate_item(harness, item.id)  # type: ignore[arg-type]
         elapsed = time.monotonic() - started
 
         self.assertLess(elapsed, 0.25)
         self.assertTrue(entered.wait(1.0))
+        self.assertEqual(1, calls)
         self.assertTrue(harness.bus.empty())
         release.set()
 
@@ -314,6 +440,56 @@ class ControllerResponsivenessTests(unittest.TestCase):
             if command is None:
                 time.sleep(0.01)
         self.assertIsInstance(command, LaunchResultCommand)
+        assert isinstance(command, LaunchResultCommand)
+        QuickAccessApp._finish_launch(  # type: ignore[arg-type]
+            harness, command.item_name, command.result
+        )
+        self.assertNotIn(item.id, harness._launch_inflight)
+
+    def test_launch_workers_are_bounded_when_multiple_shell_calls_stall(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        launched: list[str] = []
+
+        def blocking_startfile(path: str) -> None:
+            launched.append(path)
+            entered.set()
+            release.wait(2.0)
+
+        config = LauncherConfig(items=[])
+        first = config.add_item(r"\\server\offline-one", name="첫 번째")
+        second = config.add_item(r"\\server\offline-two", name="두 번째")
+        harness = _PublishHarness(config, FileLauncher(blocking_startfile))
+        harness._launch_slots = threading.BoundedSemaphore(1)
+
+        QuickAccessApp.activate_item(harness, first.id)  # type: ignore[arg-type]
+        self.assertTrue(entered.wait(1.0))
+        QuickAccessApp.activate_item(harness, second.id)  # type: ignore[arg-type]
+
+        self.assertEqual([first.path], launched)
+        self.assertIn("잠시 후", harness.toast.messages[-1][0])
+        self.assertNotIn(second.id, harness._launch_inflight)
+        release.set()
+
+    def test_quick_add_watchdog_releases_feature_and_ignores_late_result(self) -> None:
+        harness = _QuickAddWatchdogHarness()
+
+        QuickAccessApp._expire_quick_add(harness, 7)  # type: ignore[arg-type]
+
+        self.assertFalse(harness._quick_add_inflight)
+        self.assertEqual(8, harness._quick_add_generation)
+        self.assertIn("중단했습니다", harness.toast.messages[-1][0])
+        late_result = ExplorerTargetResult(
+            success=True,
+            path=r"C:\Late\item.txt",
+            suggested_name="item.txt",
+            item_type="file",
+        )
+        with patch("quickaccess.app.ask_display_name") as ask_name:
+            QuickAccessApp._finish_quick_add(  # type: ignore[arg-type]
+                harness, (7, late_result)
+            )
+        ask_name.assert_not_called()
 
     def test_hotkey_rollback_failure_is_visible_to_user(self) -> None:
         harness = _HotkeyRollbackHarness()
@@ -379,6 +555,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
 
     def test_update_available_shows_a_toast_with_a_download_action(self) -> None:
         harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
         result = UpdateCheckResult(
             available=True,
             latest_version="v9.9.9",
@@ -394,6 +571,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
 
     def test_update_notice_for_the_same_version_is_shown_only_once(self) -> None:
         harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
         harness.config.last_update_notice = "v9.9.9"
         result = UpdateCheckResult(available=True, latest_version="v9.9.9")
 
@@ -403,6 +581,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
 
     def test_unavailable_update_result_shows_no_toast(self) -> None:
         harness = _UpdateCheckHarness()
+        harness.config.check_updates = True
 
         QuickAccessApp._apply_update_check(  # type: ignore[arg-type]
             harness, UpdateCheckResult(available=False)

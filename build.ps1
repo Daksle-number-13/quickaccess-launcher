@@ -11,14 +11,19 @@ if ($Clean) {
         -LiteralPath (Join-Path $PSScriptRoot "build"), (Join-Path $PSScriptRoot "dist")
 }
 
-$pythonVersion = & $PythonExecutable -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
+$pythonProbe = @(& $PythonExecutable -c "import struct, sys; print('.'.join(map(str, sys.version_info[:3]))); print(sys.platform); print(struct.calcsize('P') * 8)")
 if ($LASTEXITCODE -ne 0) {
     throw "Could not run the selected Python interpreter: $PythonExecutable"
 }
-$parsedVersion = [version]$pythonVersion.Trim()
-$minimumReleaseVersion = [version]"3.13.15"
-if ($parsedVersion -lt $minimumReleaseVersion) {
-    throw "Release builds require Python $minimumReleaseVersion or newer; selected: $parsedVersion"
+if ($pythonProbe.Count -lt 3) {
+    throw "Could not identify the selected Python interpreter: $PythonExecutable"
+}
+$parsedVersion = [version]$pythonProbe[0].Trim()
+$pythonPlatform = $pythonProbe[1].Trim()
+$pythonBits = [int]$pythonProbe[2].Trim()
+$releaseVersion = [version]"3.13.15"
+if ($parsedVersion -ne $releaseVersion -or $pythonPlatform -ne "win32" -or $pythonBits -ne 64) {
+    throw "Release builds require Windows x64 Python $releaseVersion exactly; selected: $parsedVersion $pythonPlatform $pythonBits-bit"
 }
 
 & $PythonExecutable -m PyInstaller --noconfirm --clean quickaccess.spec

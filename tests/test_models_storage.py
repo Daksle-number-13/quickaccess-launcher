@@ -55,6 +55,13 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertEqual(2, len({item.id for item in config.items}))
         self.assertTrue(all(item.type == "folder" for item in config.items))
 
+    def test_default_uses_redirected_windows_known_folders(self) -> None:
+        redirected = [Path(r"D:\받은 파일"), Path(r"E:\OneDrive\문서")]
+        with patch("quickaccess.models._known_folder_path", side_effect=redirected):
+            config = LauncherConfig.default()
+
+        self.assertEqual([str(path) for path in redirected], [item.path for item in config.items])
+
     def test_legacy_list_migrates_missing_fields_and_duplicate_ids(self) -> None:
         config = LauncherConfig.from_data(
             [
@@ -79,6 +86,22 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertEqual("문서.xlsx", config.items[0].name)
         self.assertEqual("두 번째 순서", config.items[1].name)
         self.assertEqual(2, len({item.id for item in config.items}))
+
+    def test_legacy_missing_type_never_probes_filesystem_during_load(self) -> None:
+        with patch(
+            "quickaccess.models.os.path.isdir",
+            side_effect=AssertionError("configuration parsing must not touch the network"),
+        ):
+            config = LauncherConfig.from_data(
+                {
+                    "items": [
+                        {"path": r"\\offline-server\share\folder"},
+                        {"path": "https://example.com/docs"},
+                    ]
+                }
+            )
+
+        self.assertEqual(["file", "url"], [item.type for item in config.items])
 
     def test_safe_field_coercion_and_column_bounds(self) -> None:
         config = LauncherConfig.from_data(
@@ -206,6 +229,51 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertFalse(loaded.changed_on_disk)
             self.assertEqual(config.to_dict(), loaded.config.to_dict())
 
+    def test_atomic_save_retries_transient_windows_sharing_errors(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            store = ConfigStore(path)
+            config = LauncherConfig(items=[])
+            real_replace = os.replace
+            attempts = 0
+
+            def temporarily_locked(source: object, destination: object) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    error = PermissionError("temporarily locked")
+                    error.winerror = 32  # type: ignore[attr-defined]
+                    raise error
+                real_replace(source, destination)
+
+            with (
+                patch("quickaccess.storage.os.replace", side_effect=temporarily_locked),
+                patch("quickaccess.storage.time.sleep") as sleep,
+            ):
+                store.save(config)
+
+            self.assertEqual(3, attempts)
+            self.assertEqual(2, sleep.call_count)
+            self.assertTrue(path.is_file())
+
+    def test_atomic_save_stops_after_bounded_replace_retries(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            store = ConfigStore(path)
+            error = PermissionError("access denied")
+            error.winerror = 5  # type: ignore[attr-defined]
+
+            with (
+                patch("quickaccess.storage.os.replace", side_effect=error) as replace,
+                patch("quickaccess.storage.time.sleep") as sleep,
+                self.assertRaises(PermissionError),
+            ):
+                store.save(LauncherConfig(items=[]))
+
+            self.assertEqual(4, replace.call_count)
+            self.assertEqual(3, sleep.call_count)
+            self.assertEqual([], list(path.parent.glob(f".{path.name}.*.tmp")))
+
     def test_save_keeps_a_single_rolling_backup_of_the_previous_version(self) -> None:
         with writable_test_directory() as temporary_directory:
             path = Path(temporary_directory) / "items.json"
@@ -258,6 +326,7 @@ class ConfigStoreTests(unittest.TestCase):
             result = ConfigStore(path, user_home=temporary_directory).load()
 
             self.assertTrue(result.recovered)
+            self.assertFalse(result.restored_from_backup)
             self.assertFalse(result.created)
             self.assertIsNotNone(result.backup_path)
             assert result.backup_path is not None
@@ -265,6 +334,47 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertEqual(corrupt_bytes, result.backup_path.read_bytes())
             self.assertEqual(2, len(result.config.items))
             self.assertIsInstance(json.loads(path.read_text(encoding="utf-8")), dict)
+
+    def test_corrupt_json_restores_valid_rolling_backup_before_defaults(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            backup_path = path.with_name("items.bak.json")
+            corrupt_bytes = b'{"hotkey": broken'
+            path.write_bytes(corrupt_bytes)
+            expected = LauncherConfig(items=[])
+            expected.run_on_startup = False
+            expected.add_item(r"C:\Recovered", name="백업 항목", item_type="folder")
+            backup_path.write_text(
+                json.dumps(expected.to_dict(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            result = ConfigStore(path).load()
+
+            self.assertTrue(result.recovered)
+            self.assertTrue(result.restored_from_backup)
+            self.assertEqual("백업 항목", result.config.items[0].name)
+            self.assertFalse(result.config.run_on_startup)
+            self.assertIsNotNone(result.backup_path)
+            assert result.backup_path is not None
+            self.assertEqual(corrupt_bytes, result.backup_path.read_bytes())
+            restored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("백업 항목", restored["items"][0]["name"])
+
+    def test_invalid_rolling_backup_falls_back_to_defaults(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            path.write_text("not-json", encoding="utf-8")
+            path.with_name("items.bak.json").write_text(
+                '{"items": "also-invalid"}',
+                encoding="utf-8",
+            )
+
+            result = ConfigStore(path, user_home=temporary_directory).load()
+
+            self.assertTrue(result.recovered)
+            self.assertFalse(result.restored_from_backup)
+            self.assertEqual(2, len(result.config.items))
 
     def test_invalid_object_schema_is_recovered_like_corrupt_json(self) -> None:
         with writable_test_directory() as temporary_directory:

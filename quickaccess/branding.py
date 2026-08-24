@@ -1,4 +1,4 @@
-"""Shared Park Jin-Su signature artwork used throughout QuickAccess."""
+"""Shared QuickAccess brand artwork used throughout the application."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _source_image() -> Image.Image:
 
 @lru_cache(maxsize=16)
 def create_brand_icon(size: int = 64) -> Image.Image:
-    """Return the Park Jin-Su signature mark at the requested pixel size."""
+    """Return the QuickAccess brand mark at the requested pixel size."""
 
     if size < 16:
         raise ValueError("brand icon size must be at least 16 pixels")

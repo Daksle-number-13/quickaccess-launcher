@@ -10,12 +10,40 @@ from pathlib import Path
 import shutil
 import tempfile
 import threading
+import time
 from typing import Callable, TypeVar
 
 from .models import LauncherConfig
 
 
 _T = TypeVar("_T")
+
+_REPLACE_RETRY_WINERRORS = frozenset({5, 32})
+_REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1)
+
+
+def _atomic_replace(
+    source: str | os.PathLike[str],
+    destination: str | os.PathLike[str],
+) -> None:
+    """Replace a file, retrying only transient Windows sharing failures.
+
+    Antivirus scanners and sync clients can briefly hold a just-written file.
+    Keep the retry window deliberately short and bounded so a real permission
+    problem still reaches the caller promptly.
+    """
+
+    for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as error:
+            winerror = getattr(error, "winerror", None)
+            if winerror not in _REPLACE_RETRY_WINERRORS or attempt >= len(
+                _REPLACE_RETRY_DELAYS
+            ):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[attempt])
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +55,7 @@ class LoadResult:
     recovered: bool = False
     migrated: bool = False
     repaired: bool = False
+    restored_from_backup: bool = False
     backup_path: Path | None = None
 
     @property
@@ -140,14 +169,31 @@ class ConfigStore:
 
     def _recover_unlocked(self) -> LoadResult:
         backup_path = self._next_backup_path()
-        os.replace(self.path, backup_path)
-        config = LauncherConfig.default(user_home=self._user_home)
+        _atomic_replace(self.path, backup_path)
+        config = self._load_rolling_backup_unlocked()
+        restored_from_backup = config is not None
+        if config is None:
+            config = LauncherConfig.default(user_home=self._user_home)
         self._save_unlocked(config)
         return LoadResult(
             config=config,
             recovered=True,
+            restored_from_backup=restored_from_backup,
             backup_path=backup_path,
         )
+
+    def _load_rolling_backup_unlocked(self) -> LauncherConfig | None:
+        """Return the last known-good config when its JSON and schema are valid."""
+
+        backup_path = self._rolling_backup_path()
+        if not backup_path.is_file():
+            return None
+        try:
+            with backup_path.open("r", encoding="utf-8") as stream:
+                raw_data = json.load(stream)
+            return LauncherConfig.from_data(raw_data, user_home=self._user_home)
+        except (OSError, json.JSONDecodeError, UnicodeError, TypeError, ValueError):
+            return None
 
     def _next_backup_path(self) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -209,7 +255,7 @@ class ConfigStore:
                     shutil.copy2(self.path, self._rolling_backup_path())
                 except OSError:
                     pass
-            os.replace(temporary_path, self.path)
+            _atomic_replace(temporary_path, self.path)
         finally:
             try:
                 temporary_path.unlink(missing_ok=True)

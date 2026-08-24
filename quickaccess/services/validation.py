@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -38,17 +39,17 @@ class _TaskState:
     generation: int
     started_at: float
     callback: Callable[[ValidationResult], object]
-    timer: threading.Timer | None = None
     done: bool = False
 
 
 class PathValidationService:
     """Validate paths without blocking Tk or process shutdown.
 
-    Windows filesystem calls cannot be forcibly interrupted from Python.  Each
-    probe therefore runs in a daemon thread while a separate daemon timer emits
-    a timeout result.  A late probe result is ignored.  Generation checks also
-    prevent results for an old path from overwriting a re-assigned item.
+    Windows filesystem calls cannot be forcibly interrupted from Python.  A
+    small, fixed daemon worker pool caps the number of calls that may remain
+    blocked in the OS, while one watchdog thread emits all timeout results.  A
+    late probe result is ignored.  Generation checks also prevent results for
+    an old path from overwriting a re-assigned item.
     """
 
     def __init__(
@@ -59,15 +60,22 @@ class PathValidationService:
         exists: Callable[[str], object] = os.path.exists,
         clock: Callable[[], float] = time.monotonic,
         on_callback_error: Callable[[Exception], object] | None = None,
+        max_workers: int = 4,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
+        if max_workers <= 0:
+            raise ValueError("max_workers must be greater than zero")
         self._default_callback = on_result
         self._timeout_seconds = float(timeout_seconds)
         self._exists = exists
         self._clock = clock
         self._on_callback_error = on_callback_error
+        self._max_workers = int(max_workers)
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+        self._work_queue: queue.Queue[_TaskState | None] = queue.Queue()
+        self._workers_started = False
         self._generations: dict[str, int] = {}
         self._active: dict[str, _TaskState] = {}
         self._closed = False
@@ -91,25 +99,14 @@ class PathValidationService:
             previous = self._active.pop(item_id, None)
             if previous is not None:
                 previous.done = True
-                if previous.timer is not None:
-                    previous.timer.cancel()
 
             generation = self._generations.get(item_id, 0) + 1
             self._generations[item_id] = generation
             state = _TaskState(item_id, path, generation, self._clock(), callback)
             self._active[item_id] = state
-
-            timer = threading.Timer(self._timeout_seconds, self._on_timeout, (state,))
-            timer.daemon = True
-            state.timer = timer
-            worker = threading.Thread(
-                target=self._probe,
-                args=(state,),
-                name=f"QuickAccessPathProbe-{item_id}-{generation}",
-                daemon=True,
-            )
-            timer.start()
-            worker.start()
+            self._ensure_workers_locked()
+            self._work_queue.put(state)
+            self._condition.notify_all()
             return generation
 
     def validate_many(
@@ -129,8 +126,7 @@ class PathValidationService:
             state = self._active.pop(item_id, None)
             if state is not None:
                 state.done = True
-                if state.timer is not None:
-                    state.timer.cancel()
+            self._condition.notify_all()
 
     def close(self) -> None:
         with self._lock:
@@ -142,12 +138,71 @@ class PathValidationService:
             for state in states:
                 state.done = True
                 self._generations[state.item_id] = state.generation + 1
-                if state.timer is not None:
-                    state.timer.cancel()
+            self._condition.notify_all()
+            if self._workers_started:
+                for _index in range(self._max_workers):
+                    self._work_queue.put(None)
 
     def generation(self, item_id: str) -> int:
         with self._lock:
             return self._generations.get(item_id, 0)
+
+    def _ensure_workers_locked(self) -> None:
+        if self._workers_started:
+            return
+        self._workers_started = True
+        for index in range(self._max_workers):
+            threading.Thread(
+                target=self._worker_loop,
+                name=f"QuickAccessPathWorker-{index + 1}",
+                daemon=True,
+            ).start()
+        threading.Thread(
+            target=self._watchdog_loop,
+            name="QuickAccessPathWatchdog",
+            daemon=True,
+        ).start()
+
+    def _worker_loop(self) -> None:
+        while True:
+            state = self._work_queue.get()
+            if state is None:
+                return
+            with self._lock:
+                should_probe = (
+                    not self._closed
+                    and not state.done
+                    and self._active.get(state.item_id) is state
+                    and self._generations.get(state.item_id) == state.generation
+                )
+            if should_probe:
+                self._probe(state)
+
+    def _watchdog_loop(self) -> None:
+        while True:
+            expired: list[_TaskState] = []
+            with self._condition:
+                if self._closed:
+                    return
+                live = [state for state in self._active.values() if not state.done]
+                if not live:
+                    self._condition.wait()
+                    continue
+                now = self._clock()
+                nearest_deadline = min(
+                    state.started_at + self._timeout_seconds for state in live
+                )
+                remaining = nearest_deadline - now
+                if remaining > 0:
+                    self._condition.wait(remaining)
+                    continue
+                expired = [
+                    state
+                    for state in live
+                    if state.started_at + self._timeout_seconds <= now
+                ]
+            for state in expired:
+                self._on_timeout(state)
 
     def _probe(self, state: _TaskState) -> None:
         try:
@@ -181,8 +236,7 @@ class PathValidationService:
                 return
             state.done = True
             self._active.pop(state.item_id, None)
-            if state.timer is not None:
-                state.timer.cancel()
+            self._condition.notify_all()
             result = ValidationResult(
                 item_id=state.item_id,
                 path=state.path,
