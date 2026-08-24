@@ -9,6 +9,7 @@ from unittest.mock import patch
 import customtkinter as ctk
 from PIL import Image
 
+from quickaccess import __author__, __version__
 import quickaccess.ui.dialogs as dialogs_module
 from quickaccess.ui.dialogs import TextInputDialog, ToastManager
 from quickaccess.models import LauncherConfig, LauncherItem
@@ -77,6 +78,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.root.update()
 
         self.assertTrue(window._ultra_compact)
+        self.assertEqual("canvas", window._preferences_scroll.winfo_manager())
         self.assertEqual(int(window._add_folder_button.grid_info()["row"]), 1)
         self.assertEqual(int(window._add_file_button.grid_info()["row"]), 1)
         self.assertEqual(int(window._add_link_button.grid_info()["row"]), 1)
@@ -96,19 +98,60 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             window._quick_hotkey,
             window._startup,
             window._updates,
+            window._app_info_details,
         ):
             self.assertLessEqual(
                 widget.winfo_rootx() + widget.winfo_width(),
                 client_right,
                 widget.winfo_class(),
             )
+        self.assertEqual(2, int(window._app_info_details.grid_info()["row"]))
+        self.assertEqual(2, int(window._app_info_details.grid_info()["columnspan"]))
+        self.assertEqual(
+            f"Version {__version__}\n만든 사람 {__author__}",
+            window._app_info_details.cget("text"),
+        )
 
         window._apply_compact_layout(1000)
         self.root.update()
         self.assertFalse(window._ultra_compact)
+        self.assertEqual("canvas", window._preferences_scroll.winfo_manager())
         self.assertEqual(int(window._add_folder_button.grid_info()["row"]), 0)
         self.assertEqual(int(window._add_link_button.grid_info()["row"]), 0)
+        self.assertEqual(0, int(window._app_info_details.grid_info()["row"]))
+        self.assertEqual(
+            f"Version {__version__}  ·  만든 사람 {__author__}",
+            window._app_info_details.cget("text"),
+        )
         window.destroy()
+
+    def test_settings_displays_app_version_and_creator(self) -> None:
+        config = LauncherConfig.default()
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+            ),
+        )
+        try:
+            labels = self._descendants_of_type(window._app_info_card, ctk.CTkLabel)
+            texts = [str(label.cget("text")) for label in labels]
+            self.assertIn("앱 정보", texts)
+            self.assertIn(
+                f"Version {__version__}  ·  만든 사람 {__author__}",
+                texts,
+            )
+        finally:
+            window.destroy()
 
     def test_settings_long_korean_and_unc_text_stays_inside_compact_list(self) -> None:
         config = LauncherConfig(
@@ -277,8 +320,8 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         canvas = window._preferences_scroll._parent_canvas
         start = canvas.yview()
 
-        for _ in range(12):
-            window._startup_card.event_generate("<MouseWheel>", delta=-120)
+        for _ in range(24):
+            window._app_info_card.event_generate("<MouseWheel>", delta=-120)
         self.root.update()
 
         self.assertGreater(canvas.yview()[0], start[0])

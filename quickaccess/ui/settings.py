@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 import customtkinter as ctk
 
+from .. import __author__, __version__
 from ..models import LauncherConfig, LauncherItem, normalize_web_url
 from ..services.hotkeys import describe_hotkey_conflict_risk
 from ..services.monitor import NativeMonitorService, Rect, Size, center_window_in_work_area
@@ -733,6 +734,38 @@ class SettingsWindow(ctk.CTkToplevel):
         self._updates.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
         self._enable_keyboard_switch(self._updates)
 
+        app_info = self._settings_card(
+            scroll,
+            row=5,
+            title="앱 정보",
+            description="현재 설치된 QuickAccess의 버전과 제작 정보를 확인합니다.",
+        )
+        self._app_info_card = app_info
+        self._app_info_details = ctk.CTkLabel(
+            app_info,
+            text=self._app_info_text(ultra_compact=False),
+            height=34,
+            corner_radius=9,
+            fg_color=SURFACE_ALT,
+            text_color=TEXT,
+            font=font(10, "bold"),
+            anchor="center",
+            justify="center",
+        )
+        self._app_info_details.grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            padx=18,
+            pady=16,
+            sticky="e",
+        )
+
+    @staticmethod
+    def _app_info_text(*, ultra_compact: bool) -> str:
+        separator = "\n" if ultra_compact else "  ·  "
+        return f"Version {__version__}{separator}만든 사람 {__author__}"
+
     def _settings_card(
         self,
         parent: ctk.CTkScrollableFrame,
@@ -1021,6 +1054,18 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=(0, 12),
                 sticky="w",
             )
+            self._app_info_details.configure(
+                text=self._app_info_text(ultra_compact=ultra_compact)
+            )
+            self._app_info_details.grid_configure(
+                row=2,
+                column=0,
+                columnspan=2,
+                rowspan=1,
+                padx=12,
+                pady=(0, 12),
+                sticky="ew",
+            )
             self._layout_hotkeys_for_narrow_width()
         else:
             self._items_header.grid_columnconfigure(1, weight=0)
@@ -1088,6 +1133,18 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=16,
                 sticky="e",
             )
+            self._app_info_details.configure(
+                text=self._app_info_text(ultra_compact=False)
+            )
+            self._app_info_details.grid_configure(
+                row=0,
+                column=1,
+                columnspan=1,
+                rowspan=2,
+                padx=18,
+                pady=16,
+                sticky="e",
+            )
             self._layout_hotkeys_for_normal_width()
 
         self._items_header.grid_configure(
@@ -1102,7 +1159,11 @@ class SettingsWindow(ctk.CTkToplevel):
             padx=page_padding,
             pady=(18 if compact else 26, 12 if compact else 18),
         )
-        self._preferences_scroll.grid_configure(
+        # CTkScrollableFrame.grid() manages its outer frame, but the inherited
+        # grid_configure() would accidentally re-parent the inner content frame
+        # from the canvas to Tk's grid manager.  Configure the outer frame
+        # directly so wheel and scrollbar movement keep moving the cards.
+        self._preferences_scroll._parent_frame.grid_configure(
             padx=(page_padding, max(8, page_padding - 6)),
             pady=(0, page_padding),
         )

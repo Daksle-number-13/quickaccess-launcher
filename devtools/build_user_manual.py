@@ -273,7 +273,7 @@ def draw_page(canvas, document) -> None:  # type: ignore[no-untyped-def]
         canvas.line(MARGIN_X, 12 * mm, PAGE_WIDTH - MARGIN_X, 12 * mm)
         canvas.setFont("Malgun", 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v1.2.3")
+        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v1.2.4")
         canvas.drawRightString(PAGE_WIDTH - MARGIN_X, 7.5 * mm, str(page))
     canvas.restoreState()
 
@@ -296,7 +296,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 4 * mm),
             note("5분이면 시작할 수 있어요", "설치 없이 실행하고, 원하는 항목을 등록한 뒤 Ctrl + Space만 누르면 됩니다.", tone="green"),
             Spacer(1, 9 * mm),
-            Paragraph("버전 1.2.3  |  Windows 10/11 x64  |  2026-08-24", SMALL),
+            Paragraph("버전 1.2.4  |  Windows 10/11 x64  |  2026-08-24", SMALL),
             PageBreak(),
         ]
     )
@@ -495,7 +495,7 @@ def build() -> None:
         bottomMargin=MARGIN_BOTTOM,
         title="QuickAccess 쉬운 사용 설명서",
         author="Daksle",
-        subject="QuickAccess v1.2.3 Korean user manual",
+        subject="QuickAccess v1.2.4 Korean user manual",
         creator="QuickAccess project",
     )
     document.addPageTemplates(PageTemplate(id="manual", frames=[frame], onPage=draw_page))

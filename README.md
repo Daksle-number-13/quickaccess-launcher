@@ -74,6 +74,7 @@ Get-FileHash .\QuickAccess.exe -Algorithm SHA256
 - Windows 11 계열 카드 UI, 저장되는 밝기 모드, 혼합 DPI 모니터 대응
 - 설정에서 새 버전 자동 확인을 켜면 GitHub 릴리스를 확인해 트레이 알림으로 안내
   (기본값은 꺼짐, 같은 버전은 한 번만 표시)
+- 환경 설정 하단에서 현재 앱 버전과 공개 제작자 이름(`Daksle`) 확인
 - 설정 저장 위치: `%APPDATA%\QuickAccess\items.json`
   (저장할 때마다 직전 버전을 `items.bak.json`으로 하나 더 남겨 실수 복구 가능)
 - 로그 위치: `%LOCALAPPDATA%\QuickAccess\logs\quickaccess.log`
