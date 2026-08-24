@@ -1363,6 +1363,7 @@ class SettingsWindow(ctk.CTkToplevel):
             column=button_columns[3],
             command=lambda value=item: self._move(value, value.order + 1),
             state="disabled" if item.order >= item_count - 1 else "normal",
+            trailing_padding=0,
         )
 
     def _row_button(
@@ -1375,6 +1376,7 @@ class SettingsWindow(ctk.CTkToplevel):
         danger: bool = False,
         use_icon_font: bool = False,
         state: str = "normal",
+        trailing_padding: int = 5,
     ) -> None:
         button = ctk.CTkButton(
             parent,
@@ -1390,7 +1392,13 @@ class SettingsWindow(ctk.CTkToplevel):
             state=state,
             command=command,
         )
-        button.grid(row=0, column=column, rowspan=2, padx=(0, 5), pady=14)
+        button.grid(
+            row=0,
+            column=column,
+            rowspan=2,
+            padx=(0, trailing_padding),
+            pady=14,
+        )
         self._enable_keyboard_button(button)
         self._item_action_buttons.append(button)
 
