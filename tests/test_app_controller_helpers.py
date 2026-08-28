@@ -7,11 +7,16 @@ import unittest
 from unittest.mock import patch
 
 from quickaccess.app import QuickAccessApp
-from quickaccess.commands import CommandBus, LaunchResultCommand
+from quickaccess.commands import (
+    CommandBus,
+    CommandSource,
+    LaunchResultCommand,
+    OpenPanelCommand,
+)
 from quickaccess.models import LauncherConfig
 from quickaccess.services.explorer import ExplorerTargetResult
 from quickaccess.services.launcher import FileLauncher
-from quickaccess.services.monitor import MonitorContext, Rect
+from quickaccess.services.monitor import MonitorContext, Point, Rect
 from quickaccess.services.startup import (
     StartupRegistrationState,
     StartupRegistrationStatus,
@@ -166,6 +171,59 @@ class _PopupPoolHarness:
         popup = _PooledPopup()
         self.created.append(popup)
         return popup
+
+
+class _MutableCursorMonitor:
+    def __init__(self) -> None:
+        self.position = Point(100, 100)
+        self.reads = 0
+
+    def get_cursor_position(self) -> Point:
+        self.reads += 1
+        return self.position
+
+    @staticmethod
+    def get_monitor_context(_point: Point) -> MonitorContext:
+        desktop = Rect(0, 0, 1920, 1040)
+        return MonitorContext("display-1", desktop, desktop, 1.0)
+
+
+class _AnchorPopup:
+    def __init__(self) -> None:
+        self.anchors: list[Point] = []
+
+    def show(self, *args: object, **_kwargs: object) -> None:
+        self.anchors.append(args[2])  # type: ignore[arg-type]
+
+
+class _CursorDispatchHarness:
+    def __init__(self) -> None:
+        self.bus = CommandBus()
+        self.monitor = _MutableCursorMonitor()
+        self.config = LauncherConfig.default()
+        self.statuses: dict[str, object] = {}
+        self.icon_images: dict[str, object] = {}
+        self.popup = None
+        self._popup = _AnchorPopup()
+        self._last_anchor = None
+        self._last_work_area = None
+        self._last_monitor_context = None
+
+    def _safe_publish(self, command: object) -> None:
+        self.bus.publish(command)  # type: ignore[arg-type]
+
+    def open_panel(self, cursor_position: tuple[int, int] | None = None) -> None:
+        QuickAccessApp.open_panel(self, cursor_position)  # type: ignore[arg-type]
+
+    def _monitor_context_at(self, anchor: Point) -> MonitorContext:
+        return QuickAccessApp._monitor_context_at(self, anchor)  # type: ignore[arg-type]
+
+    def _ensure_popup(self, _context: MonitorContext) -> _AnchorPopup:
+        return self._popup
+
+    @staticmethod
+    def _schedule_icon_requests() -> None:
+        pass
 
 
 class _AppearanceHarness:
@@ -355,6 +413,25 @@ def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
 
 
 class ControllerResponsivenessTests(unittest.TestCase):
+    def test_hotkey_panel_uses_cursor_at_ui_dispatch_not_callback_time(self) -> None:
+        harness = _CursorDispatchHarness()
+
+        QuickAccessApp._hotkey_open_panel(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(0, harness.monitor.reads)
+        command = harness.bus.get_nowait()
+        self.assertIsInstance(command, OpenPanelCommand)
+        assert isinstance(command, OpenPanelCommand)
+        self.assertIs(command.source, CommandSource.HOTKEY)
+        self.assertIsNone(command.cursor_position)
+
+        harness.monitor.position = Point(900, 600)
+        QuickAccessApp._handle_command(harness, command)  # type: ignore[arg-type]
+
+        self.assertEqual(1, harness.monitor.reads)
+        self.assertEqual([Point(900, 600)], harness._popup.anchors)
+        self.assertEqual(Point(900, 600), harness._last_anchor)
+
     def test_icon_retry_requests_are_deferred_and_coalesced(self) -> None:
         harness = _IconRequestScheduleHarness()
 

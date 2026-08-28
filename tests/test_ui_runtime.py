@@ -607,7 +607,11 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 popup,
                 "deiconify",
                 wraps=popup.deiconify,
-            ) as deiconify:
+            ) as deiconify, patch.object(
+                popup,
+                "update_idletasks",
+                wraps=popup.update_idletasks,
+            ) as flush_geometry:
                 popup.show(config, {}, Point(20, 20), work_area)
                 self.root.update()
                 self.assertTrue(popup.visible)
@@ -619,7 +623,10 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 self.assertTrue(popup.winfo_ismapped())
                 self.assertIs(popup._is_native_cloaked(), True)
 
+                flush_geometry.reset_mock()
                 popup.show(config, {}, Point(400, 240), work_area)
+                flush_geometry.assert_called()
+                self.assertRegex(popup.geometry(), r"\+400\+240$")
                 self.root.update()
                 self.assertTrue(popup.visible)
                 self.assertIs(popup._is_native_cloaked(), False)

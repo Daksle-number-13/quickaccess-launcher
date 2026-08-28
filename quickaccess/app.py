@@ -312,15 +312,11 @@ class QuickAccessApp:
             LOGGER.exception("Failed to publish command")
 
     def _hotkey_open_panel(self) -> None:
-        cursor: tuple[int, int] | None = None
-        try:
-            point = self.monitor.get_cursor_position()
-            cursor = (point.x, point.y)
-        except Exception:
-            LOGGER.exception("Could not capture cursor for hotkey")
-        self._safe_publish(
-            OpenPanelCommand(source=CommandSource.HOTKEY, cursor_position=cursor)
-        )
+        # Resolve the pointer on the UI thread immediately before layout.
+        # A hotkey callback can sit in the command queue while Tk is finishing
+        # another operation; embedding a coordinate here would then place the
+        # popup where the pointer used to be instead of where it is now.
+        self._safe_publish(OpenPanelCommand(source=CommandSource.HOTKEY))
 
     def _hotkey_quick_add(self) -> None:
         hwnd: int | None = None

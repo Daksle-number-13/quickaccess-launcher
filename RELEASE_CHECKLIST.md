@@ -4,7 +4,7 @@
 
 - [x] [배포 및 업데이트 정책](docs/RELEASE.md)의 통제된 빌드 조건 확인
 - [x] `python devtools/check_release_metadata.py` — 버전·의존성·CI·one-file 명세 일치
-- [x] 릴리스 Python 3.13.15에서 `python -m pytest -q` — 271개 통과,
+- [x] 릴리스 Python 3.13.15에서 `python -m pytest -q` — 272개 통과,
       26개 하위 테스트 통과
 - [x] `python -m compileall -q main.py quickaccess tests devtools`
 - [x] `python -m pip check`
@@ -12,11 +12,11 @@
 - [x] `.\build.ps1 -Clean -SmokeTest -PythonExecutable <release-python.exe>
       -SourceDateEpoch 1787882312`
 - [x] `dist\QuickAccess.exe` 생성
-- [x] 최종 v2.0.0 `dist\QuickAccess.exe --smoke-test` — 종료 코드 0
+- [x] 최종 v2.0.1 `dist\QuickAccess.exe --smoke-test` — 종료 코드 0
 - [x] PyInstaller 경고 검토 — 앱 필수 모듈 누락 없음
 
-검증 빌드: `2.0.0.0`, 15,326,798 bytes,
-SHA-256 `2311FFE00AB2B83057A12DD141541BCF0B12C7B21FA19D3A92C4348AAE5D4DCF`.
+검증 빌드: `2.0.1.0`, 15,326,695 bytes,
+SHA-256 `52AF19996D3CAC9CFD433D673A55E16260062418358B42C7771D226231E7A3FF`.
 현재 Authenticode 상태는 `NotSigned`이며, 서명 후에는 해시와 스모크 테스트를
 서명된 파일 기준으로 다시 확인해야 합니다.
 
@@ -31,6 +31,9 @@ SHA-256 `2311FFE00AB2B83057A12DD141541BCF0B12C7B21FA19D3A92C4348AAE5D4DCF`.
       명령→화면 노출 p95 16.2ms, 명령→안정화 p95 20.4ms
 - [x] 혼합 DPI 전체 84/84회 성공, 렌더 재생성 0회,
       80ms 지연 재표시 0회
+- [x] v2.0.1 커서 위치 수정 후 동일 조건 36회 재측정 — 표시 호출
+      p95 5.0ms, 표시→화면 노출 p95 5.3ms, 명령→화면 노출 p95 13.0ms,
+      명령→안정화 p95 13.5ms, 전체 84/84회 성공
 - [x] v2.0.0 최종 one-file 산출물 측정 — 첫 로그 1.461초,
       resident-ready 2.583초, warm 로그 median 1.823초(p95 2.060초),
       warm resident-ready median 3.439초(p95 3.786초), 정상 종료 확인
@@ -43,6 +46,8 @@ SHA-256 `2311FFE00AB2B83057A12DD141541BCF0B12C7B21FA19D3A92C4348AAE5D4DCF`.
 - [x] 두 번째 실행의 패널 열기 요청 전달, 종료 코드 0, 잔류 프로세스 없음
 - [x] `--settings` 요청 전달, 종료 코드 0, 잔류 프로세스 없음
 - [x] 실행 로그에 패널·설정 활성화 이벤트 전송 성공 기록
+- [x] 실제 전역 핫키 입력으로 커서 `(240, 180)`·`(920, 520)`에서 호출 —
+      두 위치 모두 팝업 좌표 오차 0px
 
 ## 깨끗한 PC 검증
 

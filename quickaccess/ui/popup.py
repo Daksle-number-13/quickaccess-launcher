@@ -890,6 +890,10 @@ class PopupPanel(ctk.CTkToplevel):
         if self._warm_mapped:
             # Move/reflow occurred while cloaked.  Raise first, then uncloak so
             # the first user-visible frame is already at its final geometry.
+            # ``wm geometry`` is asynchronous for an already-mapped Tk window;
+            # without this idle flush DWM can reveal the previous/prewarm
+            # position for the whole invocation on some mixed-DPI desktops.
+            self.update_idletasks()
             self.lift()
             if self._set_native_cloak(False):
                 self.event_generate("<<QuickAccessVisible>>", when="tail")
