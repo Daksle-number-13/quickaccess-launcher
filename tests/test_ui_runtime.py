@@ -10,11 +10,12 @@ import customtkinter as ctk
 from PIL import Image
 
 from quickaccess import __author__, __version__
+from quickaccess.app import QuickAccessApp
 import quickaccess.ui.dialogs as dialogs_module
 from quickaccess.ui.dialogs import TextInputDialog, ToastManager
 from quickaccess.models import LauncherConfig, LauncherItem
 from quickaccess.services.icons import icon_key
-from quickaccess.services.monitor import Point, Rect
+from quickaccess.services.monitor import MonitorContext, Point, Rect
 from quickaccess.services.validation import PathStatus
 from quickaccess.ui.popup import PopupActions, PopupPanel
 from quickaccess.ui.settings import SettingsActions, SettingsWindow
@@ -71,8 +72,8 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             ),
         )
 
-        window._apply_compact_layout(340)
-        window.geometry("340x220+0+0")
+        window._apply_compact_layout(320)
+        window.geometry("320x420+0+0")
         window.deiconify()
         window.update_idletasks()
         self.root.update()
@@ -111,6 +112,27 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             f"Version {__version__}\n만든 사람 {__author__}",
             window._app_info_details.cget("text"),
         )
+
+        window._select_page("about")
+        window.update_idletasks()
+        window._about_scroll._parent_canvas.yview_moveto(1.0)
+        self.root.update()
+        canvas_right = (
+            window._about_scroll._parent_canvas.winfo_rootx()
+            + window._about_scroll._parent_canvas.winfo_width()
+        )
+        for widget in (
+            window._transfer_actions,
+            window._import_button,
+            window._export_button,
+            window._diagnostics_actions,
+            window._diagnostics_button,
+        ):
+            self.assertLessEqual(
+                widget.winfo_rootx() + widget.winfo_width(),
+                canvas_right,
+                widget.winfo_class(),
+            )
 
         window._apply_compact_layout(1000)
         self.root.update()
@@ -152,6 +174,128 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             )
         finally:
             window.destroy()
+
+    def test_settings_v2_navigation_exposes_four_focused_sections(self) -> None:
+        config = LauncherConfig.default()
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+            ),
+        )
+        try:
+            self.assertEqual(
+                ("items", "shortcuts", "appearance", "about"),
+                tuple(window._pages),
+            )
+            self.assertEqual(tuple(window._pages), tuple(window._nav_buttons))
+            for page_name in window._pages:
+                window._nav_buttons[page_name].invoke()
+                self.root.update()
+                self.assertEqual(page_name, window._active_page)
+                self.assertEqual("grid", window._pages[page_name].winfo_manager())
+                for other_name, page in window._pages.items():
+                    if other_name != page_name:
+                        self.assertEqual("", page.winfo_manager())
+
+            # Older callers that used the former page name still land in the
+            # new keyboard/startup section instead of raising an error.
+            window._select_page("preferences")
+            self.assertEqual("shortcuts", window._active_page)
+        finally:
+            window.destroy()
+
+    def test_settings_actual_startup_status_and_transfer_callbacks_are_optional(self) -> None:
+        class Status:
+            state = "stale"
+
+        config = LauncherConfig.default()
+        imported: list[bool] = []
+        exported: list[bool] = []
+        copied: list[bool] = []
+
+        def copy_diagnostics() -> bool:
+            copied.append(True)
+            return len(copied) == 1
+
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+                get_startup_status=lambda: Status(),
+                import_config=lambda: not imported.append(True),
+                export_config=lambda: not exported.append(True),
+                copy_diagnostics=copy_diagnostics,
+            ),
+        )
+        fallback = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+            ),
+        )
+        try:
+            self.assertEqual("실제 상태 · 이전 경로", window._startup_status.cget("text"))
+            self.assertEqual("normal", window._import_button.cget("state"))
+            self.assertEqual("normal", window._export_button.cget("state"))
+            self.assertEqual("normal", window._diagnostics_button.cget("state"))
+            self.assertEqual(
+                "1", str(window._diagnostics_button._canvas.cget("takefocus"))
+            )
+            self.assertTrue(window._diagnostics_button._canvas.bind("<FocusIn>"))
+            self.assertTrue(window._diagnostics_button._canvas.bind("<FocusOut>"))
+            window._import_button.invoke()
+            window._export_button.invoke()
+            window._diagnostics_button.invoke()
+            self.assertEqual([True], imported)
+            self.assertEqual([True], exported)
+            self.assertEqual([True], copied)
+            self.assertEqual("설정을 내보냈습니다.", window._transfer_hint.cget("text"))
+            self.assertEqual(
+                "진단 정보를 클립보드에 복사했습니다.",
+                window._diagnostics_feedback.cget("text"),
+            )
+            window._diagnostics_button.invoke()
+            self.assertEqual([True, True], copied)
+            self.assertEqual(
+                "진단 정보가 복사되지 않았습니다.",
+                window._diagnostics_feedback.cget("text"),
+            )
+
+            self.assertEqual("실제 상태 · 확인 전", fallback._startup_status.cget("text"))
+            self.assertEqual("disabled", fallback._import_button.cget("state"))
+            self.assertEqual("disabled", fallback._export_button.cget("state"))
+            self.assertEqual("disabled", fallback._diagnostics_button.cget("state"))
+        finally:
+            window.destroy()
+            fallback.destroy()
 
     def test_settings_long_korean_and_unc_text_stays_inside_compact_list(self) -> None:
         config = LauncherConfig(
@@ -235,7 +379,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             self.root.update()
             for button in (
                 window._nav_buttons["items"],
-                window._nav_buttons["preferences"],
+                window._nav_buttons["shortcuts"],
                 window._add_folder_button,
                 window._add_file_button,
                 window._add_link_button,
@@ -246,10 +390,14 @@ class UiRuntimeSmokeTests(unittest.TestCase):
 
             # The binding above delegates to the same public invoke path used
             # here; synthetic key events require a real foreground desktop.
-            window._nav_buttons["preferences"].invoke()
+            window._nav_buttons["shortcuts"].invoke()
             self.root.update()
-            self.assertEqual("preferences", window._active_page)
-            self.assertGreaterEqual(len(window._keyboard_targets()), 10)
+            self.assertEqual("shortcuts", window._active_page)
+            self.assertGreaterEqual(len(window._keyboard_targets()), 8)
+            for entry in (window._panel_hotkey, window._quick_hotkey):
+                self.assertEqual("1", str(entry._entry.cget("takefocus")))
+                self.assertTrue(entry._entry.bind("<FocusIn>"))
+                self.assertTrue(entry._entry.bind("<FocusOut>"))
 
             window._replace_entry(window._panel_hotkey, "ctrl+alt+p")
             window._hotkey_edited()
@@ -313,11 +461,11 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 set_hotkeys=lambda _panel, _quick: True,
             ),
         )
-        window.geometry("760x520+0+0")
-        window._select_page("preferences")
+        window.geometry("760x320+0+0")
+        window._select_page("about")
         window.deiconify()
         self.root.update()
-        canvas = window._preferences_scroll._parent_canvas
+        canvas = window._about_scroll._parent_canvas
         start = canvas.yview()
 
         for _ in range(24):
@@ -428,6 +576,472 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         self.root.mainloop()
         popup.destroy()
 
+    def test_prepared_popup_reuses_a_cloaked_mapping_without_ghost_window(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        try:
+            popup.prepare(config, {}, work_area)
+            self.root.update()
+            if not popup.warm_mapping_enabled:
+                self.skipTest("DWM application cloaking is unavailable")
+
+            self.assertTrue(popup.winfo_ismapped())
+            self.assertFalse(popup.visible)
+            self.assertIs(popup._is_native_cloaked(), True)
+
+            transitions: list[str] = []
+            popup.bind("<Map>", lambda _event: transitions.append("map"), add="+")
+            popup.bind("<Unmap>", lambda _event: transitions.append("unmap"), add="+")
+            render_count = popup.render_count
+            cards = tuple(popup._cards)
+
+            with patch.object(
+                popup,
+                "deiconify",
+                wraps=popup.deiconify,
+            ) as deiconify:
+                popup.show(config, {}, Point(20, 20), work_area)
+                self.root.update()
+                self.assertTrue(popup.visible)
+                self.assertIs(popup._is_native_cloaked(), False)
+                self.assertIs(popup.focus_get(), popup._search_entry._entry)
+                popup.hide()
+                self.root.update()
+                self.assertFalse(popup.visible)
+                self.assertTrue(popup.winfo_ismapped())
+                self.assertIs(popup._is_native_cloaked(), True)
+
+                popup.show(config, {}, Point(400, 240), work_area)
+                self.root.update()
+                self.assertTrue(popup.visible)
+                self.assertIs(popup._is_native_cloaked(), False)
+
+            deiconify.assert_not_called()
+            # DWM may synthesize a Tk <Map> notification when an already
+            # mapped window is uncloaked, but there must be no native unmap
+            # (and therefore no expensive remap on the next invocation).
+            self.assertNotIn("unmap", transitions)
+            self.assertEqual(render_count, popup.render_count)
+            self.assertEqual(cards, tuple(popup._cards))
+        finally:
+            popup.hide()
+            self.root.update()
+            popup.destroy()
+
+    def test_popup_uses_withdraw_fallback_when_native_cloak_is_unavailable(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        try:
+            with patch.object(popup, "_set_native_cloak", return_value=False):
+                popup.prepare(config, {}, work_area)
+                self.assertFalse(popup.warm_mapping_enabled)
+                with (
+                    patch.object(
+                        popup,
+                        "deiconify",
+                        wraps=popup.deiconify,
+                    ) as deiconify,
+                    patch.object(
+                        popup,
+                        "withdraw",
+                        wraps=popup.withdraw,
+                    ) as withdraw,
+                ):
+                    popup.show(config, {}, Point(20, 20), work_area)
+                    self.root.update()
+                    popup.hide()
+                    self.root.update()
+
+                deiconify.assert_called_once()
+                withdraw.assert_called_once()
+                self.assertFalse(popup.visible)
+                self.assertFalse(popup.winfo_ismapped())
+        finally:
+            popup.destroy()
+
+    def test_popup_ignores_transient_focus_gap_after_dwm_exposure(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        try:
+            popup.prepare(config, {}, work_area)
+            popup.show(config, {}, Point(20, 20), work_area)
+            self.root.update()
+            self.assertTrue(popup.visible)
+            self.assertIs(popup.focus_get(), popup._search_entry._entry)
+
+            # Reproduce the full-suite race: a delayed DWM FocusOut arrives
+            # after arming has completed, while Tk briefly reports no focus.
+            with patch.object(popup, "focus_get", return_value=None):
+                popup._on_focus_out(tk.Event())
+                self.root.update_idletasks()
+                self.assertTrue(popup.visible)
+
+            self.root.after(80, self.root.quit)
+            self.root.mainloop()
+            self.assertTrue(popup.visible)
+            self.assertIs(popup.focus_get(), popup._search_entry._entry)
+        finally:
+            popup.hide()
+            self.root.update()
+            popup.destroy()
+
+    def test_popup_still_hides_after_focus_really_moves_outside(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.show(config, {}, Point(20, 20), Rect(0, 0, 1920, 1040))
+            self.root.update()
+            self.assertTrue(popup.visible)
+
+            with patch.object(popup, "focus_get", return_value=None):
+                popup._on_focus_out(tk.Event())
+                self.root.after(360, self.root.quit)
+                self.root.mainloop()
+
+            self.assertFalse(popup.visible)
+        finally:
+            popup.hide()
+            self.root.update()
+            popup.destroy()
+
+    def test_runtime_state_update_preserves_visible_focus_and_mapping(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.show(
+                config,
+                {},
+                Point(20, 20),
+                Rect(0, 0, 1920, 1040),
+            )
+            self.root.update()
+            popup._focus_card(1)
+            self.root.update()
+            generation = popup._show_generation
+            render_count = popup.render_count
+
+            with (
+                patch.object(popup, "deiconify", wraps=popup.deiconify) as deiconify,
+                patch.object(popup, "lift", wraps=popup.lift) as lift,
+                patch.object(popup, "focus_force", wraps=popup.focus_force) as focus_force,
+            ):
+                applied = popup.apply_runtime_state(
+                    config,
+                    {config.items[0].id: PathStatus.MISSING},
+                )
+
+            self.assertTrue(applied)
+            self.assertEqual(generation, popup._show_generation)
+            self.assertEqual(render_count, popup.render_count)
+            self.assertIs(popup.focus_get(), popup._cards[1]._canvas)
+            deiconify.assert_not_called()
+            lift.assert_not_called()
+            focus_force.assert_not_called()
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_popup_search_is_prewarmed_focused_and_reset_on_reopen(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        try:
+            popup.prepare(config, {}, work_area)
+            search_entry = popup._search_entry
+            first_cards = tuple(popup._cards)
+            render_count = popup.render_count
+            self.assertIsNotNone(search_entry)
+
+            popup.show(config, {}, Point(20, 20), work_area)
+            self.root.update()
+            assert search_entry is not None
+            self.assertIs(popup.focus_get(), search_entry._entry)
+            self.assertEqual(first_cards, tuple(popup._visible_cards))
+            self.assertEqual(render_count, popup.render_count)
+
+            assert popup._search_variable is not None
+            popup._search_variable.set("문서")
+            self.root.update()
+            self.assertNotEqual(first_cards, tuple(popup._visible_cards))
+
+            popup.hide()
+            popup.show(config, {}, Point(20, 20), work_area)
+            self.root.update()
+            self.assertEqual("", popup._search_variable.get())
+            self.assertEqual(first_cards, tuple(popup._visible_cards))
+            self.assertIs(search_entry, popup._search_entry)
+            self.assertEqual(first_cards, tuple(popup._cards))
+            self.assertEqual(render_count, popup.render_count)
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_popup_search_filters_unicode_choseong_without_io_or_rebuild(self) -> None:
+        config = LauncherConfig(
+            columns=3,
+            items=[
+                LauncherItem(
+                    name="Example User",
+                    path=r"C:\Profiles\sample",
+                    type="folder",
+                    order=0,
+                ),
+                LauncherItem(
+                    name="김민수 검사 기준서",
+                    path=r"C:\Quality\standard.pdf",
+                    type="file",
+                    order=1,
+                ),
+                LauncherItem(
+                    name="주간 자료",
+                    path=r"C:\품질문서\생산일지.xlsx",
+                    type="file",
+                    order=2,
+                ),
+            ],
+        )
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.prepare(config, {}, Rect(0, 0, 1920, 1040))
+            first_cards = tuple(popup._cards)
+            render_count = popup.render_count
+            assert popup._search_variable is not None
+
+            with (
+                patch("os.path.exists", side_effect=AssertionError("filesystem access")),
+                patch(
+                    "urllib.request.urlopen",
+                    side_effect=AssertionError("network access"),
+                ),
+            ):
+                popup._search_variable.set("ㄱㅁㅅ ㄱㅅㄱㅈㅅ")
+                self.assertEqual(
+                    [popup._card_by_item_id[config.items[1].id]],
+                    popup._visible_cards,
+                )
+                popup._search_variable.set("ＳＡＭＰＬＥ")
+                self.assertEqual(
+                    [popup._card_by_item_id[config.items[0].id]],
+                    popup._visible_cards,
+                )
+                popup._search_variable.set("")
+
+            self.assertEqual(first_cards, tuple(popup._visible_cards))
+            self.assertEqual(first_cards, tuple(popup._cards))
+            self.assertEqual(render_count, popup.render_count)
+        finally:
+            popup.destroy()
+
+    def test_popup_search_keyboard_actions_and_zero_result_settings(self) -> None:
+        config = LauncherConfig.default()
+        activated: list[str] = []
+        settings_opened: list[bool] = []
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=activated.append,
+                relocate=lambda _item: None,
+                open_settings=lambda: settings_opened.append(True),
+            ),
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        try:
+            popup.show(config, {}, Point(20, 20), work_area)
+            self.root.update()
+            assert popup._search_variable is not None
+            assert popup._search_entry is not None
+            self.assertTrue(popup.bind("<Control-f>"))
+            self.assertTrue(popup._search_entry._entry.bind("<Down>"))
+            self.assertTrue(popup._search_entry._entry.bind("<Return>"))
+
+            popup._search_variable.set("문서")
+            popup._focus_search_result(1)
+            self.root.update()
+            first_result = popup._visible_cards[0]
+            self.assertIs(popup.focus_get(), first_result._canvas)
+            popup._focus_search()
+            self.assertIs(popup.focus_get(), popup._search_entry._entry)
+            popup._activate_first_search_result()
+            self.assertEqual([config.items[1].id], activated)
+
+            popup.show(config, {}, Point(20, 20), work_area)
+            popup._search_variable.set("결과가 절대 없는 검색")
+            self.root.update()
+            self.assertEqual([], popup._visible_cards)
+            self.assertTrue(popup._showing_search_empty)
+            self.assertEqual("place", popup._search_empty_state.winfo_manager())
+            assert popup._search_empty_button is not None
+            popup._search_empty_button.invoke()
+            self.assertEqual([True], settings_opened)
+
+            popup.show(config, {}, Point(20, 20), work_area)
+            popup._search_variable.set("문서")
+            popup._on_escape()
+            self.assertTrue(popup.visible)
+            self.assertEqual("", popup._search_variable.get())
+            self.assertEqual(popup._cards, popup._visible_cards)
+            popup._on_escape()
+            self.assertFalse(popup.visible)
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_runtime_state_update_preserves_active_search_focus_and_scroll(self) -> None:
+        config = LauncherConfig(
+            columns=3,
+            items=[
+                LauncherItem(
+                    name=("유지" if index < 18 else "제외") + f" 항목 {index + 1}",
+                    path=rf"C:\QuickAccess\Search-{index + 1}",
+                    type="file",
+                    order=index,
+                )
+                for index in range(24)
+            ],
+        )
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.show(config, {}, Point(20, 20), Rect(0, 0, 640, 340))
+            self.root.update()
+            assert popup._search_variable is not None
+            popup._search_variable.set("유지")
+            popup._focus_card(len(popup._visible_cards) - 1)
+            self.root.update()
+            canvas = popup._items_frame._parent_canvas
+            scroll_before = canvas.yview()
+            focused_before = popup.focus_get()
+            visible_before = tuple(popup._visible_cards)
+
+            with (
+                patch.object(popup, "deiconify", wraps=popup.deiconify) as deiconify,
+                patch.object(popup, "lift", wraps=popup.lift) as lift,
+                patch.object(popup, "geometry", wraps=popup.geometry) as geometry,
+            ):
+                applied = popup.apply_runtime_state(
+                    config,
+                    {config.items[0].id: PathStatus.TIMEOUT},
+                )
+
+            self.assertTrue(applied)
+            self.assertEqual("유지", popup._search_variable.get())
+            self.assertEqual(visible_before, tuple(popup._visible_cards))
+            self.assertIs(focused_before, popup.focus_get())
+            self.assertEqual(scroll_before, canvas.yview())
+            deiconify.assert_not_called()
+            lift.assert_not_called()
+            geometry.assert_not_called()
+        finally:
+            popup.hide()
+            self.root.after(50, self.root.quit)
+            self.root.mainloop()
+            popup.destroy()
+
+    def test_timeout_status_keeps_an_icon_that_arrived_before_validation(self) -> None:
+        config = LauncherConfig.default()
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            pixels = bytes([20, 80, 160, 255] * (24 * 24))
+            pil_image = Image.frombuffer("RGBA", (24, 24), pixels, "raw", "BGRA", 0, 1)
+            icon = ctk.CTkImage(
+                light_image=pil_image,
+                dark_image=pil_image,
+                size=(24, 24),
+            )
+            item = config.items[0]
+            key = icon_key(item.path, item.type)
+            work_area = Rect(0, 0, 1920, 1040)
+            popup.prepare(config, {}, work_area)
+
+            self.assertTrue(popup.apply_runtime_state(config, {}, {key: icon}))
+            card = popup._card_by_item_id[item.id]
+            self.assertIs(icon, card._icon_label.cget("image"))
+
+            self.assertTrue(
+                popup.apply_runtime_state(
+                    config,
+                    {item.id: PathStatus.TIMEOUT},
+                    {key: icon},
+                )
+            )
+            self.assertIs(icon, card._icon_label.cget("image"))
+            self.assertFalse(card._broken)
+            self.assertTrue(card._timed_out)
+            self.assertEqual("warning", card._style_state)
+        finally:
+            popup.destroy()
+
     def test_popup_regrids_one_two_three_columns_without_rebuilding(self) -> None:
         config = LauncherConfig(
             columns=3,
@@ -462,6 +1076,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 first_brand_mark = popup._brand_mark
                 first_count_badge = popup._count_badge
                 first_settings_button = popup._settings_button
+                first_search_entry = popup._search_entry
                 settings_return_binding = popup._settings_button._canvas.bind("<Return>")
                 self.assertEqual(3, popup._layout_columns)
                 wide_position = popup._cards[2].place_info()
@@ -488,6 +1103,9 @@ class UiRuntimeSmokeTests(unittest.TestCase):
                 )
                 self.assertFalse(popup._count_badge.winfo_manager())
                 self.assertEqual(24, int(popup._brand_mark.cget("width")))
+                self.assertEqual("grid", popup._search_entry.winfo_manager())
+                self.assertEqual(0, int(popup._search_entry.grid_info()["column"]))
+                self.assertEqual(4, int(popup._search_entry.grid_info()["columnspan"]))
                 with patch.object(popup, "_focus_card") as focus_card:
                     popup._navigate(0, "down")
                     focus_card.assert_called_once_with(1)
@@ -507,6 +1125,7 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             self.assertIs(first_brand_mark, popup._brand_mark)
             self.assertIs(first_count_badge, popup._count_badge)
             self.assertIs(first_settings_button, popup._settings_button)
+            self.assertIs(first_search_entry, popup._search_entry)
             self.assertEqual(
                 settings_return_binding,
                 popup._settings_button._canvas.bind("<Return>"),
@@ -561,6 +1180,191 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             self.assertIs(first_frame, popup._items_frame)
             self.assertEqual(first_cards, tuple(popup._cards))
             self.assertEqual(first_render_count, popup.render_count)
+        finally:
+            popup.destroy()
+
+    def test_prepared_monitor_popups_open_at_target_dpi_without_delayed_reshow(
+        self,
+    ) -> None:
+        config = LauncherConfig(
+            columns=3,
+            items=[
+                LauncherItem(
+                    name=f"혼합 DPI {index + 1}",
+                    path=rf"C:\QuickAccess\Mixed-{index + 1}",
+                    type="file",
+                    order=index,
+                )
+                for index in range(12)
+            ],
+        )
+        actions = PopupActions(
+            activate=lambda _item: None,
+            relocate=lambda _item: None,
+            open_settings=lambda: None,
+        )
+        work_area = Rect(0, 0, 900, 700)
+        popup_100 = PopupPanel(self.root, actions)
+        popup_200 = PopupPanel(self.root, actions)
+        try:
+            popup_100.prepare(
+                config,
+                {},
+                work_area,
+                target_dpi_scale=1.0,
+            )
+            popup_200.prepare(
+                config,
+                {},
+                work_area,
+                target_dpi_scale=2.0,
+            )
+            self.assertEqual(3, popup_100._layout_columns)
+            self.assertFalse(popup_100._scrolling)
+            self.assertEqual(2, popup_200._layout_columns)
+            self.assertTrue(popup_200._scrolling)
+            first_trees = {
+                popup_100: (
+                    popup_100.winfo_children()[0],
+                    tuple(popup_100._cards),
+                    popup_100.render_count,
+                ),
+                popup_200: (
+                    popup_200.winfo_children()[0],
+                    tuple(popup_200._cards),
+                    popup_200.render_count,
+                ),
+            }
+
+            for popup, scale in ((popup_100, 1.0), (popup_200, 2.0)):
+                generation = popup._show_generation
+                with patch.object(popup, "after", wraps=popup.after) as schedule:
+                    popup.show(
+                        config,
+                        {},
+                        Point(890, 690),
+                        work_area,
+                        target_dpi_scale=scale,
+                    )
+                self.assertEqual(generation + 1, popup._show_generation)
+                self.assertFalse(
+                    any(call.args and call.args[0] == 80 for call in schedule.call_args_list)
+                )
+                popup.hide()
+
+            for popup, (shell, cards, render_count) in first_trees.items():
+                self.assertIs(shell, popup.winfo_children()[0])
+                self.assertEqual(cards, tuple(popup._cards))
+                self.assertEqual(render_count, popup.render_count)
+        finally:
+            popup_100.destroy()
+            popup_200.destroy()
+
+    def test_inactive_monitor_popup_is_refreshed_before_its_next_show(self) -> None:
+        config = LauncherConfig.default()
+        actions = PopupActions(
+            activate=lambda _item: None,
+            relocate=lambda _item: None,
+            open_settings=lambda: None,
+        )
+        work_area = Rect(0, 0, 1920, 1040)
+        context_100 = MonitorContext("DISPLAY-A", work_area, work_area, 1.0)
+        context_200 = MonitorContext("DISPLAY-B", work_area, work_area, 2.0)
+        popup_100 = PopupPanel(self.root, actions)
+        popup_200 = PopupPanel(self.root, actions)
+        try:
+            popup_100.prepare(
+                config,
+                {},
+                work_area,
+                target_dpi_scale=1.0,
+            )
+            popup_200.prepare(
+                config,
+                {},
+                work_area,
+                target_dpi_scale=2.0,
+            )
+            previous_render_count = popup_200.render_count
+            config.add_item(r"C:\QuickAccess\New", name="새 항목")
+            harness = type(
+                "InactivePoolHarness",
+                (),
+                {
+                    "_popup_pool": {
+                        context_100.cache_key: popup_100,
+                        context_200.cache_key: popup_200,
+                    },
+                    "_popup_contexts": {
+                        context_100.cache_key: context_100,
+                        context_200.cache_key: context_200,
+                    },
+                    "config": config,
+                    "statuses": {},
+                    "icon_images": {},
+                },
+            )()
+
+            QuickAccessApp._prepare_inactive_popups(harness, popup_100)  # type: ignore[arg-type]
+
+            self.assertEqual(previous_render_count + 1, popup_200.render_count)
+            refreshed_render_count = popup_200.render_count
+            popup_200.show(
+                config,
+                {},
+                Point(100, 100),
+                work_area,
+                target_dpi_scale=2.0,
+            )
+            self.assertEqual(refreshed_render_count, popup_200.render_count)
+        finally:
+            popup_100.destroy()
+            popup_200.destroy()
+
+    def test_stale_target_dpi_is_corrected_without_recursive_show(self) -> None:
+        config = LauncherConfig.default()
+        work_area = Rect(0, 0, 1920, 1040)
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.prepare(
+                config,
+                {},
+                work_area,
+                target_dpi_scale=1.0,
+            )
+            with patch.object(popup, "show", wraps=popup.show) as show:
+                popup.show(
+                    config,
+                    {},
+                    Point(100, 100),
+                    work_area,
+                    target_dpi_scale=1.0,
+                )
+                generation = popup._show_generation
+                with patch(
+                    "quickaccess.ui.popup.ScalingTracker.get_window_dpi_scaling",
+                    return_value=2.0,
+                ):
+                    popup._validate_mapped_dpi(
+                        generation,
+                        1.0,
+                        config,
+                        {},
+                        Point(100, 100),
+                        work_area,
+                        {},
+                    )
+
+            self.assertEqual(1, show.call_count)
+            self.assertEqual(generation, popup._show_generation)
+            self.assertEqual(2.0, popup._prepared_dpi_scale)
         finally:
             popup.destroy()
 

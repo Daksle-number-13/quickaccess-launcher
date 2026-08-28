@@ -11,10 +11,14 @@ from unittest.mock import patch
 import uuid
 
 from quickaccess.models import (
+    CURRENT_SCHEMA_VERSION,
     DEFAULT_APPEARANCE_MODE,
     DEFAULT_HOTKEY,
     DEFAULT_QUICK_ADD_HOTKEY,
+    MAX_LAUNCHER_ITEMS,
     LauncherConfig,
+    LauncherItemLimitError,
+    UnsupportedSchemaVersionError,
     normalize_web_url,
 )
 from quickaccess.storage import ConfigStore
@@ -46,6 +50,7 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertTrue(config.run_on_startup)
         self.assertFalse(config.welcome_shown)
         self.assertFalse(config.check_updates)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, config.to_dict()["schema_version"])
         self.assertEqual(3, config.columns)
         self.assertEqual(
             [str(home / "Downloads"), str(home / "Documents")],
@@ -130,6 +135,75 @@ class LauncherConfigTests(unittest.TestCase):
         self.assertEqual("dark", config.set_appearance_mode("DARK"))
         self.assertEqual("system", config.set_appearance_mode("invalid"))
 
+    def test_unversioned_and_v1_objects_migrate_without_losing_current_fields(self) -> None:
+        current_fields = {
+            "hotkey": "ctrl+alt+space",
+            "quick_add_hotkey": "ctrl+alt+shift+space",
+            "appearance_mode": "dark",
+            "run_on_startup": False,
+            "columns": 4,
+            "welcome_shown": True,
+            "check_updates": True,
+            "last_update_notice": "v9.8.7",
+            "items": [
+                {
+                    "id": "stable-id",
+                    "name": "업무 포털",
+                    "path": "https://example.com/work?q=1",
+                    "type": "url",
+                    "order": 0,
+                }
+            ],
+        }
+
+        for schema_version in (None, 1):
+            with self.subTest(schema_version=schema_version):
+                source = dict(current_fields)
+                if schema_version is not None:
+                    source["schema_version"] = schema_version
+                migrated = LauncherConfig.from_data(source).to_dict()
+
+                self.assertEqual(CURRENT_SCHEMA_VERSION, migrated["schema_version"])
+                for field, expected in current_fields.items():
+                    self.assertEqual(expected, migrated[field])
+
+    def test_future_schema_has_a_dedicated_error(self) -> None:
+        with self.assertRaises(UnsupportedSchemaVersionError) as raised:
+            LauncherConfig.from_data(
+                {"schema_version": CURRENT_SCHEMA_VERSION + 1, "items": []}
+            )
+
+        self.assertEqual(CURRENT_SCHEMA_VERSION + 1, raised.exception.schema_version)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, raised.exception.current_version)
+
+    def test_oversized_configuration_is_rejected_before_ui_materialization(self) -> None:
+        items = [
+            {"name": f"Item {index}", "path": rf"C:\Items\{index}.txt"}
+            for index in range(MAX_LAUNCHER_ITEMS + 1)
+        ]
+
+        with self.assertRaises(LauncherItemLimitError) as raised:
+            LauncherConfig.from_data({"items": items})
+
+        self.assertEqual(MAX_LAUNCHER_ITEMS + 1, raised.exception.count)
+        self.assertEqual(MAX_LAUNCHER_ITEMS, raised.exception.limit)
+
+    def test_add_item_limit_fails_without_mutating_existing_items(self) -> None:
+        config = LauncherConfig.from_data(
+            {
+                "items": [
+                    {"name": f"Item {index}", "path": rf"C:\Items\{index}.txt"}
+                    for index in range(MAX_LAUNCHER_ITEMS)
+                ]
+            }
+        )
+        existing_ids = [item.id for item in config.items]
+
+        with self.assertRaises(LauncherItemLimitError):
+            config.add_item(r"C:\Items\overflow.txt", name="Overflow")
+
+        self.assertEqual(existing_ids, [item.id for item in config.items])
+
     def test_mutations_keep_fixed_contiguous_order(self) -> None:
         with writable_test_directory() as temporary_directory:
             root = Path(temporary_directory)
@@ -208,6 +282,7 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertNotIn(b"\\ub2e4\\uc6b4", raw_bytes)
             payload = json.loads(raw_bytes.decode("utf-8"))
             self.assertIsInstance(payload, dict)
+            self.assertEqual(CURRENT_SCHEMA_VERSION, payload["schema_version"])
             self.assertIn("welcome_shown", payload)
             self.assertEqual("system", payload["appearance_mode"])
             self.assertEqual([0, 1], [item["order"] for item in payload["items"]])
@@ -304,7 +379,15 @@ class ConfigStoreTests(unittest.TestCase):
     def test_legacy_schema_is_migrated_and_rewritten(self) -> None:
         with writable_test_directory() as temporary_directory:
             path = Path(temporary_directory) / "items.json"
-            legacy = [{"name": "업무", "path": r"C:\Work", "type": "folder"}]
+            legacy = [
+                {
+                    "id": "legacy-stable-id",
+                    "name": "업무",
+                    "path": r"C:\Work",
+                    "type": "folder",
+                    "order": 7,
+                }
+            ]
             path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
 
             result = ConfigStore(path).load()
@@ -313,9 +396,69 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertFalse(result.recovered)
             rewritten = json.loads(path.read_text(encoding="utf-8"))
             self.assertIsInstance(rewritten, dict)
+            self.assertEqual(CURRENT_SCHEMA_VERSION, rewritten["schema_version"])
             self.assertEqual("system", rewritten["appearance_mode"])
             self.assertEqual(0, rewritten["items"][0]["order"])
-            self.assertTrue(rewritten["items"][0]["id"])
+            self.assertEqual("legacy-stable-id", rewritten["items"][0]["id"])
+            self.assertEqual("업무", rewritten["items"][0]["name"])
+            self.assertEqual(r"C:\Work", rewritten["items"][0]["path"])
+            self.assertEqual("folder", rewritten["items"][0]["type"])
+
+    def test_unversioned_and_v1_object_files_are_rewritten_as_v2(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            for schema_version in (None, 1):
+                with self.subTest(schema_version=schema_version):
+                    source = {
+                        "hotkey": "ctrl+alt+space",
+                        "quick_add_hotkey": "ctrl+alt+shift+space",
+                        "appearance_mode": "dark",
+                        "run_on_startup": False,
+                        "columns": 4,
+                        "welcome_shown": True,
+                        "check_updates": True,
+                        "last_update_notice": "v8.7.6",
+                        "items": [
+                            {
+                                "id": "preserved-id",
+                                "name": "보존 항목",
+                                "path": r"C:\Work\preserved.txt",
+                                "type": "file",
+                                "order": 0,
+                            }
+                        ],
+                    }
+                    if schema_version is not None:
+                        source["schema_version"] = schema_version
+                    path.write_text(
+                        json.dumps(source, ensure_ascii=False), encoding="utf-8"
+                    )
+
+                    result = ConfigStore(path).load()
+
+                    self.assertTrue(result.migrated)
+                    rewritten = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual(CURRENT_SCHEMA_VERSION, rewritten["schema_version"])
+                    for field in source:
+                        if field != "schema_version":
+                            self.assertEqual(source[field], rewritten[field])
+
+    def test_future_schema_file_is_rejected_without_touching_any_bytes(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            original = (
+                b'{\r\n  "schema_version": 999,\r\n'
+                b'  "future_field": {"must": "survive"},\r\n'
+                b'  "items": []\r\n}\r\n'
+            )
+            path.write_bytes(original)
+
+            with self.assertRaises(UnsupportedSchemaVersionError):
+                ConfigStore(path).load()
+
+            self.assertEqual(original, path.read_bytes())
+            self.assertEqual([], list(path.parent.glob("items.corrupt-*.json")))
+            self.assertFalse(path.with_name("items.bak.json").exists())
 
     def test_corrupt_json_is_backed_up_and_defaults_are_recovered(self) -> None:
         with writable_test_directory() as temporary_directory:
@@ -413,6 +556,39 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertEqual(2, len(backup["items"]))
             rewritten = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(1, len(rewritten["items"]))
+
+    def test_corrupt_backup_retention_is_bounded_and_keeps_rolling_backup(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            rolling_backup = path.with_name("items.bak.json")
+            rolling_contents = LauncherConfig(items=[]).to_dict()
+            rolling_backup.write_text(
+                json.dumps(rolling_contents, ensure_ascii=False), encoding="utf-8"
+            )
+            store = ConfigStore(path, max_corrupt_backups=3)
+
+            latest_backup: Path | None = None
+            for index in range(7):
+                path.write_bytes(f"broken-{index}".encode())
+                result = store.load()
+                latest_backup = result.backup_path
+
+            corrupt_backups = list(path.parent.glob("items.corrupt-*.json"))
+            self.assertEqual(3, len(corrupt_backups))
+            self.assertIsNotNone(latest_backup)
+            assert latest_backup is not None
+            self.assertIn(latest_backup, corrupt_backups)
+            self.assertTrue(rolling_backup.exists())
+            self.assertEqual(
+                rolling_contents,
+                json.loads(rolling_backup.read_text(encoding="utf-8")),
+            )
+
+    def test_corrupt_backup_retention_rejects_invalid_limits(self) -> None:
+        with self.assertRaises(TypeError):
+            ConfigStore(max_corrupt_backups=True)
+        with self.assertRaises(ValueError):
+            ConfigStore(max_corrupt_backups=0)
 
 
 if __name__ == "__main__":

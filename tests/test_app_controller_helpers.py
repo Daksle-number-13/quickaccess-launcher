@@ -11,6 +11,11 @@ from quickaccess.commands import CommandBus, LaunchResultCommand
 from quickaccess.models import LauncherConfig
 from quickaccess.services.explorer import ExplorerTargetResult
 from quickaccess.services.launcher import FileLauncher
+from quickaccess.services.monitor import MonitorContext, Rect
+from quickaccess.services.startup import (
+    StartupRegistrationState,
+    StartupRegistrationStatus,
+)
 from quickaccess.services.update_check import UpdateCheckResult
 
 
@@ -64,10 +69,32 @@ class _StartupRollbackHarness:
         self.calls = 0
         self.startup = self
 
-    def set_enabled(self, _enabled: bool, _executable: str, _arguments: object) -> None:
+    def reconcile(
+        self, enabled: bool, _executable: str, _arguments: object
+    ) -> StartupRegistrationStatus:
         self.calls += 1
         if self.calls == 2:
             raise OSError("registry rollback denied")
+        return StartupRegistrationStatus(
+            state=(
+                StartupRegistrationState.CORRECT
+                if enabled
+                else StartupRegistrationState.ABSENT
+            ),
+            desired_enabled=enabled,
+            expected_command="QuickAccess.exe --startup",
+        )
+
+    @staticmethod
+    def _require_startup_in_sync(status: StartupRegistrationStatus) -> None:
+        QuickAccessApp._require_startup_in_sync(status)
+
+    def _rollback_startup_registration(
+        self, desired_enabled: bool, executable: str, arguments: tuple[str, ...]
+    ) -> bool:
+        return QuickAccessApp._rollback_startup_registration(
+            self, desired_enabled, executable, arguments  # type: ignore[arg-type]
+        )
 
     @staticmethod
     def _commit(_mutator: object, _message: str) -> bool:
@@ -88,10 +115,57 @@ class _PopupRefreshHarness:
         self.root = _AfterIdleRoot()
         self.popup = type("Popup", (), {"visible": True})()
         self._popup_refresh_after = None
+        self._popup_refresh_requires_layout = False
 
     @staticmethod
     def _flush_popup_refresh() -> None:
         pass
+
+
+class _IconRequestScheduleHarness:
+    def __init__(self) -> None:
+        self.root = _AfterIdleRoot()
+        self._stopping = False
+        self._icon_request_after: str | None = None
+        self.request_calls = 0
+
+    def _request_all_icons(self) -> None:
+        self.request_calls += 1
+
+    def _flush_icon_requests(self) -> None:
+        QuickAccessApp._flush_icon_requests(self)  # type: ignore[arg-type]
+
+
+class _PooledPopup:
+    def __init__(self) -> None:
+        self.exists = True
+        self.hidden = 0
+        self.destroyed = 0
+
+    def winfo_exists(self) -> bool:
+        return self.exists
+
+    def hide(self) -> None:
+        self.hidden += 1
+
+    def destroy(self) -> None:
+        self.destroyed += 1
+        self.exists = False
+
+
+class _PopupPoolHarness:
+    def __init__(self) -> None:
+        self.popup = None
+        self._popup_pool: dict[tuple[str, int | None], _PooledPopup] = {}
+        self._popup_contexts: dict[
+            tuple[str, int | None], MonitorContext
+        ] = {}
+        self.created: list[_PooledPopup] = []
+
+    def _new_popup(self) -> _PooledPopup:
+        popup = _PooledPopup()
+        self.created.append(popup)
+        return popup
 
 
 class _AppearanceHarness:
@@ -255,6 +329,10 @@ class _StartHarness:
     def _prewarm_popup(self) -> None:
         self.start_events.append("prewarm")
 
+    @staticmethod
+    def _schedule_monitor_refresh() -> None:
+        pass
+
     def _check_for_update(self) -> None:
         self.update_check_calls += 1
 
@@ -277,6 +355,119 @@ def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
 
 
 class ControllerResponsivenessTests(unittest.TestCase):
+    def test_icon_retry_requests_are_deferred_and_coalesced(self) -> None:
+        harness = _IconRequestScheduleHarness()
+
+        QuickAccessApp._schedule_icon_requests(harness)  # type: ignore[arg-type]
+        QuickAccessApp._schedule_icon_requests(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(1, len(harness.root.callbacks))
+        callback = harness.root.callbacks[0]
+        callback()  # type: ignore[operator]
+        self.assertEqual(1, harness.request_calls)
+        self.assertIsNone(harness._icon_request_after)
+
+    def test_popup_pool_reuses_one_prepared_window_per_monitor(self) -> None:
+        harness = _PopupPoolHarness()
+        left = MonitorContext(
+            r"\\.\DISPLAY1",
+            Rect(-1080, 0, 0, 1920),
+            Rect(-1080, 0, 0, 1872),
+            1.0,
+        )
+        right = MonitorContext(
+            r"\\.\DISPLAY2",
+            Rect(0, 0, 2880, 1800),
+            Rect(0, 0, 2880, 1704),
+            2.0,
+        )
+
+        first_left = QuickAccessApp._ensure_popup(harness, left)  # type: ignore[arg-type]
+        second_left = QuickAccessApp._ensure_popup(harness, left)  # type: ignore[arg-type]
+        first_right = QuickAccessApp._ensure_popup(harness, right)  # type: ignore[arg-type]
+
+        self.assertIs(first_left, second_left)
+        self.assertIsNot(first_left, first_right)
+        self.assertEqual(2, len(harness.created))
+
+    def test_popup_pool_retires_old_window_when_monitor_scale_changes(self) -> None:
+        harness = _PopupPoolHarness()
+        at_150 = MonitorContext(
+            r"\\.\DISPLAY2",
+            Rect(0, 0, 3840, 2160),
+            Rect(0, 0, 3840, 2088),
+            1.5,
+        )
+        at_200 = MonitorContext(
+            r"\\.\DISPLAY2",
+            Rect(0, 0, 3840, 2160),
+            Rect(0, 0, 3840, 2088),
+            2.0,
+        )
+
+        old_popup = QuickAccessApp._ensure_popup(harness, at_150)  # type: ignore[arg-type]
+        harness.popup = old_popup
+        new_popup = QuickAccessApp._ensure_popup(harness, at_200)  # type: ignore[arg-type]
+
+        self.assertIsNot(old_popup, new_popup)
+        self.assertEqual(1, old_popup.hidden)
+        self.assertEqual(1, old_popup.destroyed)
+        self.assertIsNone(harness.popup)
+        self.assertEqual({at_200.cache_key}, set(harness._popup_pool))
+
+    def test_monitor_poll_prewarms_new_topology_before_next_hotkey(self) -> None:
+        contexts = (
+            MonitorContext(
+                r"\\.\DISPLAY1",
+                Rect(0, 0, 1920, 1080),
+                Rect(0, 0, 1920, 1040),
+                1.0,
+            ),
+            MonitorContext(
+                r"\\.\DISPLAY2",
+                Rect(1920, 0, 4480, 1440),
+                Rect(1920, 0, 4480, 1400),
+                1.5,
+            ),
+        )
+        prepared: list[tuple[str, float | None]] = []
+        discarded: list[set[tuple[str, int | None]]] = []
+        scheduled: list[bool] = []
+
+        def popup_for(context: MonitorContext) -> object:
+            return SimpleNamespace(
+                prepare=lambda *_args, **kwargs: prepared.append(
+                    (context.identifier, kwargs.get("target_dpi_scale"))
+                )
+            )
+
+        harness = SimpleNamespace(
+            _monitor_refresh_after="old-timer",
+            _stopping=False,
+            monitor=SimpleNamespace(get_monitor_contexts=lambda: contexts),
+            _monitor_topology_signature=(),
+            config=LauncherConfig.default(),
+            statuses={},
+            icon_images={},
+            _topology_signature=lambda values: QuickAccessApp._topology_signature(values),
+            _ensure_popup=popup_for,
+            _discard_stale_popups=lambda keys: discarded.append(keys),
+            _schedule_monitor_refresh=lambda: scheduled.append(True),
+        )
+
+        QuickAccessApp._poll_monitor_topology(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(
+            [(contexts[0].identifier, 1.0), (contexts[1].identifier, 1.5)],
+            prepared,
+        )
+        self.assertEqual([{context.cache_key for context in contexts}], discarded)
+        self.assertEqual(
+            QuickAccessApp._topology_signature(contexts),
+            harness._monitor_topology_signature,
+        )
+        self.assertEqual([True], scheduled)
+
     def test_start_prewarms_popup_before_enabling_hotkeys(self) -> None:
         harness = _StartHarness(check_updates=False)
 
@@ -387,17 +578,23 @@ class ControllerResponsivenessTests(unittest.TestCase):
         harness = _PopupRefreshHarness()
 
         QuickAccessApp._refresh_visible_popup(harness)  # type: ignore[arg-type]
-        QuickAccessApp._refresh_visible_popup(harness)  # type: ignore[arg-type]
+        QuickAccessApp._refresh_visible_popup(  # type: ignore[arg-type]
+            harness,
+            layout_required=True,
+        )
 
         self.assertEqual(len(harness.root.callbacks), 1)
         self.assertEqual(harness._popup_refresh_after, "after-1")
+        self.assertTrue(harness._popup_refresh_requires_layout)
 
     def test_hidden_popup_refresh_is_applied_during_prewarm(self) -> None:
         prewarm_calls: list[bool] = []
         harness = SimpleNamespace(
             _popup_refresh_after="after-1",
+            _popup_refresh_requires_layout=False,
             _stopping=False,
             popup=SimpleNamespace(visible=False),
+            _popup_pool={},
             _prewarm_popup=lambda: prewarm_calls.append(True),
         )
 

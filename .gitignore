@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.log
 .pytest_cache/
+pytest-cache-files-*/
+.audit-test-temp-*/
 .coverage
 htmlcov/
 .venv/
@@ -11,6 +13,8 @@ python-*-amd64.exe
 build/
 dist/
 artifacts/
+tmp/
+.test-work/
 *.spec.bak
 
 # Local signing credentials must never enter source control.

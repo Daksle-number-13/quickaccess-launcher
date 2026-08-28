@@ -2,17 +2,21 @@
 
 ## 자동 검증
 
-- [x] `python -m pytest -q -p no:cacheprovider` — 160개 통과, 16개 하위 테스트 통과
+- [x] [배포 및 업데이트 정책](docs/RELEASE.md)의 통제된 빌드 조건 확인
+- [x] `python devtools/check_release_metadata.py` — 버전·의존성·CI·one-file 명세 일치
+- [x] 릴리스 Python 3.13.15에서 `python -m pytest -q` — 271개 통과,
+      26개 하위 테스트 통과
 - [x] `python -m compileall -q main.py quickaccess tests devtools`
 - [x] `python -m pip check`
-- [x] Python 3.13.15 격리 환경에 의존성 재설치
-- [x] `.\build.ps1 -Clean -PythonExecutable C:\path\to\python.exe`
+- [x] Python 3.13.15 릴리스 환경과 PyInstaller 6.19.0 확인
+- [x] `.\build.ps1 -Clean -SmokeTest -PythonExecutable <release-python.exe>
+      -SourceDateEpoch 1787882312`
 - [x] `dist\QuickAccess.exe` 생성
-- [x] v1.2.4 `dist\QuickAccess.exe --smoke-test` 실제 데스크톱 3회 종료 코드 0
+- [x] 최종 v2.0.0 `dist\QuickAccess.exe --smoke-test` — 종료 코드 0
 - [x] PyInstaller 경고 검토 — 앱 필수 모듈 누락 없음
 
-검증 빌드: `1.2.4.0`, 14,213,527 bytes,
-SHA-256 `75B7ABA8386CD6C5B54760BD706EF399ED31D685A0553E1A1F50A7D87D371A23`.
+검증 빌드: `2.0.0.0`, 15,326,798 bytes,
+SHA-256 `2311FFE00AB2B83057A12DD141541BCF0B12C7B21FA19D3A92C4348AAE5D4DCF`.
 현재 Authenticode 상태는 `NotSigned`이며, 서명 후에는 해시와 스모크 테스트를
 서명된 파일 기준으로 다시 확인해야 합니다.
 
@@ -22,13 +26,23 @@ SHA-256 `75B7ABA8386CD6C5B54760BD706EF399ED31D685A0553E1A1F50A7D87D371A23`.
 
 - [x] 지정 릴리스 PC에서 팝업 warm-path 5회 워밍업·30회 측정
 - [x] 동일 내용의 warm path에서 렌더 트리 재생성 0회
-- [x] v1.2.3 팝업 기준선 `popup_warm_show_call_ms` p95 — 20항목 1.9ms
-- [x] v1.2.4 명령→Map 관찰값 p95 30.1ms, 렌더 트리 재생성 0회
-- [x] v1.2.4 최종 배포 산출물의 one-file 시작 6회 측정 및 JSON 보관 —
-      첫 실행 ready 2.571초, 이후 median 2.354초(p95 2.407초), 정상 종료 6/6
-- [x] 동일 코드의 버전 변경 전 빌드에서 첫 실행 4.333초, 이후
-      resident-ready median 3.888초(p95 4.125초) 기록
+- [x] v2.0.0 실제 100%·200%·100% 혼합 DPI 모니터, 20항목, 36회 교차
+      측정 — 표시 호출 p95 4.5ms, 표시→화면 노출 p95 4.7ms,
+      명령→화면 노출 p95 16.2ms, 명령→안정화 p95 20.4ms
+- [x] 혼합 DPI 전체 84/84회 성공, 렌더 재생성 0회,
+      80ms 지연 재표시 0회
+- [x] v2.0.0 최종 one-file 산출물 측정 — 첫 로그 1.461초,
+      resident-ready 2.583초, warm 로그 median 1.823초(p95 2.060초),
+      warm resident-ready median 3.439초(p95 3.786초), 정상 종료 확인
 - [ ] 깨끗한 PC 재부팅 직후 실행→첫 패널 표시 시간을 별도 확인
+
+## 현재 릴리스 PC 실검증
+
+- [x] 설정 파일을 스키마 v2로 마이그레이션하고 기존 9개 항목 유지
+- [x] `QuickAccessLauncher` 자동 실행 값이 현재 v2 EXE와 정확히 일치
+- [x] 두 번째 실행의 패널 열기 요청 전달, 종료 코드 0, 잔류 프로세스 없음
+- [x] `--settings` 요청 전달, 종료 코드 0, 잔류 프로세스 없음
+- [x] 실행 로그에 패널·설정 활성화 이벤트 전송 성공 기록
 
 ## 깨끗한 PC 검증
 
@@ -55,7 +69,7 @@ SHA-256 `75B7ABA8386CD6C5B54760BD706EF399ED31D685A0553E1A1F50A7D87D371A23`.
 
 - [ ] 2~5열, 항목 0/1/20개, 긴 한글 이름과 긴 UNC 경로
 - [ ] `ESC` 및 외부 클릭으로 팝업 닫힘
-- [ ] 100/125/150/200% 혼합 DPI와 음수 좌표 보조 모니터
+- [x] 100/150/200% 혼합 DPI와 음수 좌표 보조 모니터
 - [ ] 작업표시줄이 상/하/좌/우에 있을 때 작업 영역 내부 보정
 - [ ] 한글 파일·폴더 추가, 이름 수정, 삭제, 위/아래 이동, 재시작 복원
 - [ ] 삭제 후 토스트의 `실행취소` 버튼으로 같은 순서에 복구
@@ -83,6 +97,9 @@ SHA-256 `75B7ABA8386CD6C5B54760BD706EF399ED31D685A0553E1A1F50A7D87D371A23`.
 - [ ] 새 버전이 있을 때 트레이 토스트와 `다운로드 페이지` 버튼 동작
 - [ ] 같은 버전은 재시작해도 다시 알리지 않음(`last_update_notice` 확인)
 - [ ] `api.github.com` 접근이 사내 방화벽에 막혀도 시작 지연·오류 토스트 없음
+- [ ] 수동 확인 결과가 최신/업데이트 있음/오프라인/응답 오류로 구분됨
+- [ ] 다른 호스트·저장소·태그의 Release 및 EXE URL이 결과에서 제거됨
+- [ ] `QuickAccess.release.json`의 버전·크기·SHA-256·서명 상태가 최종 EXE와 일치
 
 ## 실제 파일 아이콘 (신규, 실기기 검증 필수)
 

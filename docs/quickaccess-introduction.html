@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="QuickAccess Launcher의 주요 기능, 장단점, 도입 전후 업무 흐름과 보안·운영 정보를 소개합니다.">
+  <meta name="description" content="QuickAccess Launcher v2의 검색, 다중 등록, 설정 백업·복원, 자동 실행 복구와 실제 사용 흐름을 소개합니다.">
   <meta name="theme-color" content="#0b63e5">
   <title>QuickAccess Launcher | 자주 쓰는 파일·폴더·링크를 한 번에</title>
   <link rel="icon" type="image/png" href="../assets/quickaccess-mark.png">
@@ -281,6 +281,22 @@
     .trust-item strong { display: block; margin-bottom: 2px; font-size: 15px; }
     .trust-item span { color: var(--ink-500); font-size: 13px; }
 
+    .evidence-note {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 16px;
+      margin-top: 18px;
+      padding: 17px 20px;
+      border: 1px solid #bfd4f2;
+      border-radius: 14px;
+      background: var(--blue-050);
+      color: var(--ink-700);
+      font-size: 13px;
+    }
+    .evidence-note strong { color: var(--blue-700); font-size: 15px; white-space: nowrap; }
+    .evidence-note a { color: var(--blue-700); font-weight: 800; }
+
     section { padding: 94px 0; }
     .section-soft { background: var(--canvas); }
 
@@ -401,9 +417,9 @@
     .shot-media {
       display: grid;
       place-items: center;
-      aspect-ratio: 16 / 10;
+      aspect-ratio: var(--shot-ratio);
       overflow: hidden;
-      padding: 16px;
+      padding: 12px;
       border-bottom: 1px solid var(--line);
       background: #f3f7fc;
     }
@@ -412,6 +428,8 @@
     .shot-media img { transition: transform 160ms ease; }
     .shot-copy { padding: 20px 22px 23px; }
     .shot-copy p { margin-bottom: 0; color: var(--ink-700); font-size: 14px; }
+    .settings-groups { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+    .settings-groups span { padding: 5px 8px; border-radius: 999px; background: var(--blue-050); color: var(--blue-700); font-size: 11px; font-weight: 800; }
 
     .motion-grid {
       display: grid;
@@ -688,30 +706,21 @@
     .explorer-row.selected { border: 1px solid #78a9ee; background: #dcecff; color: #183c70; font-weight: 800; }
     .file-name { display: flex; align-items: center; gap: 6px; }
     .file-name::before { content: ""; width: 12px; height: 15px; border: 1px solid #4b8de8; border-radius: 2px; background: #fff; }
-
-    .name-dialog {
+    .selection-count {
       position: absolute;
-      top: 28%;
-      left: 50%;
-      z-index: 7;
-      width: 64%;
-      padding: 15px;
-      border: 1px solid #bdcadc;
-      border-radius: 12px;
-      background: #fff;
-      box-shadow: 0 18px 40px rgba(22, 52, 94, 0.25);
-      opacity: 0;
-      transform: translate(-50%, 12px) scale(0.96);
+      left: 7%;
+      bottom: 14%;
+      z-index: 6;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: #174f9d;
+      color: #fff;
+      font-size: 8px;
+      font-weight: 900;
+      box-shadow: 0 5px 14px rgba(20, 61, 116, 0.24);
     }
-    .name-dialog strong { display: block; margin-bottom: 10px; font-size: 11px; }
-    .dialog-label { margin-bottom: 4px; color: var(--ink-500); font-size: 8px; }
-    .dialog-help { margin-bottom: 8px; color: #8090a6; font-size: 7px; }
-    .dialog-input { margin-bottom: 11px; padding: 7px 8px; border: 1px solid #b8c9df; border-radius: 6px; background: #f9fbfe; color: var(--ink-900); font-size: 9px; }
-    .dialog-actions { display: flex; justify-content: flex-end; gap: 6px; }
-    .dialog-button { padding: 5px 10px; border-radius: 6px; background: #eef3f9; color: var(--ink-700); font-size: 8px; font-weight: 800; }
-    .dialog-button.primary { background: var(--blue-600); color: #fff; }
 
-    .click-register { left: 85%; top: 82%; }
+    .pointer-register { filter: drop-shadow(0 0 0 #fff) drop-shadow(0 0 2px #fff) drop-shadow(0 4px 6px rgba(5, 18, 39, 0.65)) drop-shadow(0 0 9px #ffd43b); }
 
     .registered-result {
       position: absolute;
@@ -814,9 +823,11 @@
     .motion-demo.is-playing .click-open { animation: click-open 9s ease both; }
     .motion-demo.is-playing .folder-result { animation: folder-open 9s ease both; }
     .motion-demo.is-playing .key-register { animation: key-register 10s ease both; }
-    .motion-demo.is-playing .name-dialog { animation: dialog-register 10s ease both; }
     .motion-demo.is-playing .pointer-register { animation: pointer-register 10s ease both; }
-    .motion-demo.is-playing .click-register { animation: click-register 10s ease both; }
+    .motion-demo.is-playing .selection-one { animation: selection-one 10s ease both; }
+    .motion-demo.is-playing .selection-two { animation: selection-two 10s ease both; }
+    .motion-demo.is-playing .selection-three { animation: selection-three 10s ease both; }
+    .motion-demo.is-playing .selection-count { animation: selection-count 10s ease both; }
     .motion-demo.is-playing .registered-result { animation: registered-result 10s ease both; }
 
     @keyframes key-open {
@@ -844,28 +855,24 @@
       66%, 100% { opacity: 1; transform: translateY(0) scale(1); }
     }
     @keyframes key-register {
-      0%, 4%, 22%, 100% { opacity: 0; transform: translate(-50%, -9px) scale(0.96); }
-      8%, 18% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-    }
-    @keyframes dialog-register {
-      0%, 23% { opacity: 0; transform: translate(-50%, 12px) scale(0.96); }
-      31%, 56% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-      62%, 100% { opacity: 0; transform: translate(-50%, -5px) scale(0.99); }
+      0%, 37%, 61%, 100% { opacity: 0; transform: translate(-50%, -9px) scale(0.96); }
+      43%, 56% { opacity: 1; transform: translate(-50%, 0) scale(1); }
     }
     @keyframes pointer-register {
-      0%, 35% { left: 92%; top: 38%; opacity: 0; }
-      42% { left: 92%; top: 38%; opacity: 1; }
-      49%, 60% { left: 85%; top: 82%; opacity: 1; }
-      65%, 100% { left: 85%; top: 82%; opacity: 0; }
+      0%, 5% { left: 83%; top: 76%; opacity: 0; }
+      9% { left: 83%; top: 76%; opacity: 1; }
+      16% { left: 32%; top: 47%; opacity: 1; }
+      23% { left: 32%; top: 57%; opacity: 1; }
+      30% { left: 32%; top: 67%; opacity: 1; }
+      35%, 100% { left: 32%; top: 67%; opacity: 0; }
     }
-    @keyframes click-register {
-      0%, 53% { opacity: 0; transform: translate(-50%, -50%) scale(0.35); }
-      57% { opacity: 0.9; }
-      63%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.55); }
-    }
+    @keyframes selection-one { 0%, 14% { border-color: transparent; background: transparent; color: var(--ink-700); } 18%, 100% { border-color: #78a9ee; background: #dcecff; color: #183c70; } }
+    @keyframes selection-two { 0%, 21% { border-color: transparent; background: transparent; color: var(--ink-700); } 25%, 100% { border-color: #78a9ee; background: #dcecff; color: #183c70; } }
+    @keyframes selection-three { 0%, 28% { border-color: transparent; background: transparent; color: var(--ink-700); } 32%, 100% { border-color: #78a9ee; background: #dcecff; color: #183c70; } }
+    @keyframes selection-count { 0%, 29% { opacity: 0; transform: translateY(4px); } 34%, 61% { opacity: 1; transform: translateY(0); } 66%, 100% { opacity: 0; transform: translateY(-3px); } }
     @keyframes registered-result {
-      0%, 61%, 100% { opacity: 0; transform: translateY(12px) scale(0.96); }
-      68%, 96% { opacity: 1; transform: translateY(0) scale(1); }
+      0%, 59%, 100% { opacity: 0; transform: translateY(12px) scale(0.96); }
+      66%, 96% { opacity: 1; transform: translateY(0) scale(1); }
     }
 
     .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
@@ -966,6 +973,8 @@
       .flow { grid-template-columns: 1fr 1fr; }
       .flow-step:nth-child(2)::after { display: none; }
       .motion-grid { max-width: 760px; margin-inline: auto; }
+      .evidence-note { grid-template-columns: 1fr; gap: 4px; }
+      .evidence-note strong { white-space: normal; }
     }
 
     @media (max-width: 700px) {
@@ -1004,7 +1013,6 @@
       .key-combo { gap: 4px; padding-inline: 8px; }
       .key-combo kbd { min-width: 29px; padding-inline: 6px; font-size: 9px; }
       .folder-files { gap: 5px; }
-      .name-dialog { top: 18%; width: 76%; padding: 12px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1036,7 +1044,7 @@
   <header class="topbar">
     <div class="container nav">
       <a class="brand" href="#top" aria-label="QuickAccess 소개 맨 위로">
-        <img src="../assets/quickaccess-mark.png" alt="">
+        <img src="../assets/quickaccess-mark.png" width="512" height="512" alt="">
         <span>QuickAccess</span>
       </a>
       <nav class="nav-links" aria-label="페이지 메뉴">
@@ -1044,7 +1052,7 @@
         <a href="#features">주요 기능</a>
         <a href="#motion-demos">동작 예시</a>
         <a href="#pros-cons">장단점</a>
-        <a class="nav-cta" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v1.2.4" target="_blank" rel="noopener noreferrer">다운로드</a>
+        <a class="nav-cta" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/latest" target="_blank" rel="noopener noreferrer">최신 공개판</a>
       </nav>
     </div>
   </header>
@@ -1053,11 +1061,11 @@
     <section class="hero" id="top">
       <div class="container hero-grid">
         <div class="hero-copy">
-          <div class="eyebrow">Windows 10/11용 빠른 실행 런처</div>
+          <div class="eyebrow">QuickAccess v2 · Windows 빠른 실행 런처</div>
           <h1>찾으러 가지 말고,<br><span class="accent">바로 여세요.</span></h1>
           <p>QuickAccess는 자주 쓰는 폴더, 파일, 웹 링크를 하나의 패널에 모아 전역 단축키 한 번으로 여는 가벼운 Windows 상주형 런처입니다.</p>
           <div class="hero-actions">
-            <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v1.2.4/QuickAccess.exe">v1.2.4 바로 다운로드</a>
+            <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/latest">최신 공개판 확인</a>
             <a class="button secondary" href="#comparison">도입 효과 살펴보기</a>
           </div>
           <div class="hero-note">별도 설치 없음 · 관리자 권한 불필요 · MIT 오픈소스 · Windows x64 · 현재 공개 EXE는 미서명</div>
@@ -1078,10 +1086,14 @@
     <div class="container trust-strip" aria-label="제품 핵심 정보">
       <div class="trust-grid">
         <div class="trust-item"><strong>Portable EXE</strong><span>설치 과정 없이 바로 실행</span></div>
-        <div class="trust-item"><strong>전역 단축키</strong><span>다른 앱 위에서도 패널 호출</span></div>
+        <div class="trust-item"><strong>빠른 상주 호출</strong><span>측정값 p95 16.2ms</span></div>
         <div class="trust-item"><strong>로컬 우선</strong><span>바로가기 정보는 PC에 저장</span></div>
         <div class="trust-item"><strong>한글·멀티모니터</strong><span>혼합 DPI와 한글 경로 지원</span></div>
       </div>
+      <aside class="evidence-note" aria-label="성능 측정 안내">
+        <strong>실제 릴리스 PC 측정</strong>
+        <span>v2 후보를 실제 혼합 배율 3모니터 PC에서 36회 측정한 결과, 상주 상태의 명령 발행부터 창 노출 신호까지 p95 16.2ms였습니다. 첫 픽셀 합성 시간은 아니며 PC·보안 프로그램·화면 구성에 따라 달라질 수 있습니다. <a href="PERFORMANCE.md">측정 조건 보기</a></span>
+      </aside>
     </div>
 
     <section aria-labelledby="problem-title">
@@ -1126,11 +1138,12 @@
               <tr><th scope="col">비교 항목</th><th scope="col">도입 전</th><th scope="col">QuickAccess 도입 후</th></tr>
             </thead>
             <tbody>
-              <tr><th scope="row">찾는 방법</th><td>탐색기·바탕화면·브라우저 즐겨찾기를 각각 확인</td><td>Ctrl + Space로 한 패널에서 선택</td></tr>
+              <tr><th scope="row">찾는 방법</th><td>탐색기·바탕화면·브라우저 즐겨찾기를 각각 확인</td><td>Ctrl + Space 후 이름·경로·URL·한글 초성으로 검색</td></tr>
               <tr><th scope="row">업무 시작</th><td>폴더 구조를 기억하거나 검색어를 다시 입력</td><td>업무 이름으로 저장된 카드를 바로 실행</td></tr>
-              <tr><th scope="row">새 항목 등록</th><td>위치와 이름을 따로 정리하거나 바로가기를 수동 생성</td><td>탐색기에서 Ctrl + Shift + Space로 빠르게 등록</td></tr>
-              <tr><th scope="row">항목 관리</th><td>파일·폴더·링크가 서로 다른 위치에 분산</td><td>설정 화면에서 이름, 순서, 경로를 한 번에 관리</td></tr>
+              <tr><th scope="row">새 항목 등록</th><td>위치와 이름을 따로 정리하거나 바로가기를 수동 생성</td><td>탐색기에서 여러 항목을 골라 Ctrl + Shift + Space로 한 번에 등록</td></tr>
+              <tr><th scope="row">항목 관리</th><td>파일·폴더·링크가 서로 다른 위치에 분산</td><td>용도별로 나눈 네 설정 화면에서 필요한 항목만 관리</td></tr>
               <tr><th scope="row">경로 변경</th><td>깨진 바로가기를 찾아 새로 만들기</td><td>경고 카드에서 새로운 위치로 즉시 재지정</td></tr>
+              <tr><th scope="row">PC 이동·복구</th><td>바로가기 목록을 다시 만들기</td><td>설정을 파일로 내보내고, 미리 확인한 뒤 병합 또는 교체</td></tr>
             </tbody>
           </table>
         </div>
@@ -1148,16 +1161,19 @@
       <div class="container">
         <div class="section-heading">
           <div class="section-kicker">Core Features</div>
-          <h2 id="features-title">필요한 기능만<br>빠르고 명확하게</h2>
-          <p>패널 호출부터 등록, 복구, 개인화까지 일상적인 Windows 사용 흐름에 맞췄습니다.</p>
+          <h2 id="features-title">v2에서 더 빠르고<br>더 안전하게</h2>
+          <p>상주 호출의 반응성은 지키면서 검색, 다중 등록, 설정 이동과 Windows 복구 흐름을 강화했습니다.</p>
         </div>
         <div class="feature-grid">
           <article class="card feature-card"><span class="tag">실행</span><h3>파일·폴더·웹 링크 통합</h3><p>형식이 다른 업무 항목도 같은 카드 목록에서 한 번에 열 수 있습니다.</p></article>
-          <article class="card feature-card"><span class="tag">단축키</span><h3>커서 위치에 패널 표시</h3><p>마우스가 있는 모니터의 작업 영역 안에 패널을 배치해 시선 이동을 줄입니다.</p></article>
-          <article class="card feature-card"><span class="tag">등록</span><h3>탐색기에서 빠른 추가</h3><p>활성 탐색기의 선택 항목 또는 현재 폴더를 별도의 복사 과정 없이 등록합니다.</p></article>
+          <article class="card feature-card"><span class="tag">검색</span><h3>한글 초성과 키보드 탐색</h3><p>이름·경로·URL을 여러 검색어로 좁히고, 방향키와 Enter만으로 바로 실행합니다.</p></article>
+          <article class="card feature-card"><span class="tag">단축키</span><h3>커서가 있는 모니터에 즉시 표시</h3><p>배율이 다른 모니터별 패널을 미리 준비해 화면을 옮겨도 불필요한 재구성을 줄입니다.</p></article>
+          <article class="card feature-card"><span class="tag">다중 등록</span><h3>탐색기 선택 항목 한 번에 추가</h3><p>활성 탐색기에서 고른 여러 파일·폴더를 순서대로, 한 번의 저장으로 등록합니다.</p></article>
           <article class="card feature-card"><span class="tag">복구</span><h3>깨진 경로 바로 재지정</h3><p>이동·삭제된 항목은 상태를 표시하고, 같은 카드에서 새로운 위치를 선택할 수 있습니다.</p></article>
-          <article class="card feature-card"><span class="tag">개인화</span><h3>밝기·열 수·단축키 설정</h3><p>시스템·밝게·어둡게 모드와 2~5열 배치, 두 전역 단축키를 직접 조정합니다.</p></article>
-          <article class="card feature-card"><span class="tag">운영</span><h3>자동 실행·단일 인스턴스</h3><p>사용자 계정으로 조용히 시작하고, 중복 실행과 설정 파일 충돌을 방지합니다.</p></article>
+          <article class="card feature-card"><span class="tag">설정</span><h3>목적별 네 화면</h3><p>바로가기, 단축키·시작, 화면·패널, 앱 정보로 나눠 원하는 설정을 빠르게 찾습니다.</p></article>
+          <article class="card feature-card"><span class="tag">이동</span><h3>가져오기·내보내기</h3><p>설정 파일을 내보내고, 충돌과 변경 내용을 확인한 뒤 병합 또는 교체합니다.</p></article>
+          <article class="card feature-card"><span class="tag">자동 실행</span><h3>실제 Windows 상태 확인·복구</h3><p>켜짐 표시만 믿지 않고 등록된 실행 경로를 검사해 누락되거나 오래된 경로를 복구합니다.</p></article>
+          <article class="card feature-card"><span class="tag">안정성</span><h3>중복 실행도 기존 창으로 전달</h3><p>두 번째 실행은 별도 프로세스를 남기지 않고 상주 중인 QuickAccess에 패널·설정 열기 요청을 전달합니다.</p></article>
         </div>
       </div>
     </section>
@@ -1167,20 +1183,20 @@
         <div class="section-heading">
           <div class="section-kicker">Actual Screens</div>
           <h2 id="screens-title">실제 화면으로 보는<br>QuickAccess</h2>
-          <p>빠른 실행 패널은 작게, 환경 설정은 항목을 한눈에 관리할 수 있게 구성했습니다.</p>
+          <p>프로그램에서 직접 캡처한 화면을 원본 비율 그대로 표시합니다. 이미지를 누르면 확대해서 볼 수 있습니다.</p>
         </div>
         <div class="showcase-grid">
           <figure class="shot-card">
-            <a class="shot-media" href="screenshots/quickaccess-popup-light.png" target="_blank" rel="noopener noreferrer" aria-label="빠른 실행 패널 원본 화면 크게 보기">
+            <a class="shot-media" style="--shot-ratio: 896 / 440" href="screenshots/quickaccess-popup-light.png" target="_blank" rel="noopener noreferrer" aria-label="빠른 실행 패널 원본 화면 크게 보기">
               <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
             </a>
-            <figcaption class="shot-copy"><h3>빠른 실행 패널</h3><p>예시 화면의 샘플 경로입니다. 카드 이름과 유형을 확인하고, 마우스 또는 키보드로 원하는 항목을 실행합니다. 이미지를 누르면 원본 크기로 볼 수 있습니다.</p></figcaption>
+            <figcaption class="shot-copy"><h3>빠른 실행 패널 · 실제 캡처</h3><p>검색창에서 이름·경로·URL을 좁히고, 마우스 또는 방향키와 Enter로 원하는 항목을 실행합니다.</p></figcaption>
           </figure>
           <figure class="shot-card">
-            <a class="shot-media" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
-              <img src="screenshots/quickaccess-settings-light.png" width="2026" height="1471" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
+            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
             </a>
-            <figcaption class="shot-copy"><h3>환경 설정</h3><p>예시 화면의 샘플 경로입니다. 바로가기 목록, 화면 스타일, 패널 열 수, 단축키와 Windows 자동 실행을 한곳에서 관리합니다. 이미지를 누르면 원본 크기로 볼 수 있습니다.</p></figcaption>
+            <figcaption class="shot-copy"><h3>환경 설정 · 실제 캡처</h3><p>v2에서는 긴 한 화면 대신 목적별 네 화면으로 이동합니다. 좁은 창에서도 각 화면만 자연스럽게 스크롤됩니다.</p><div class="settings-groups" aria-label="v2 환경 설정 화면 구성"><span>바로가기</span><span>단축키·시작</span><span>화면·패널</span><span>앱 정보</span></div></figcaption>
           </figure>
         </div>
       </div>
@@ -1239,9 +1255,9 @@
 
           <article class="card motion-card motion-demo" id="demo-register" data-demo data-demo-name="탐색기 빠른 등록 동작">
             <div class="motion-copy">
-              <span class="demo-label">탐색기 빠른 등록</span>
-              <h3>Ctrl + Shift + Space로 추가</h3>
-              <p>파일 탐색기에서 항목을 선택하고 표시 이름만 확인하면 빠른 실행 목록에 등록됩니다.</p>
+              <span class="demo-label">탐색기 다중 등록</span>
+              <h3>Ctrl + Shift + Space로 한 번에 추가</h3>
+              <p>파일 탐색기에서 여러 항목을 선택하면 각 파일 이름을 표시 이름으로 사용해 한 번에 등록합니다.</p>
             </div>
 
             <div class="motion-stage" aria-hidden="true">
@@ -1252,33 +1268,26 @@
                 </div>
                 <div class="explorer-list">
                   <div class="explorer-row header"><span>이름</span><span>수정한 날짜</span><span>유형</span></div>
-                  <div class="explorer-row"><span class="file-name">검사 기준서.pdf</span><span>오늘</span><span>PDF</span></div>
-                  <div class="explorer-row selected"><span class="file-name">불량 집계.xlsx</span><span>오늘</span><span>Excel</span></div>
-                  <div class="explorer-row"><span class="file-name">주간 회의록.docx</span><span>어제</span><span>Word</span></div>
+                  <div class="explorer-row selected selection-one"><span class="file-name">검사 기준서.pdf</span><span>오늘</span><span>PDF</span></div>
+                  <div class="explorer-row selected selection-two"><span class="file-name">불량 집계.xlsx</span><span>오늘</span><span>Excel</span></div>
+                  <div class="explorer-row selected selection-three"><span class="file-name">주간 회의록.docx</span><span>어제</span><span>Word</span></div>
                 </div>
               </div>
+              <span class="selection-count">3개 선택</span>
+              <span class="demo-pointer pointer-register"></span>
 
               <div class="key-combo key-register"><kbd>Ctrl</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>Space</kbd></div>
-              <div class="name-dialog">
-                <strong>빠른 등록</strong>
-                <div class="dialog-label">런처에 표시할 이름을 입력하세요.</div>
-                <div class="dialog-help">설정에서 언제든 다시 변경할 수 있습니다.</div>
-                <div class="dialog-input">불량 집계.xlsx</div>
-                <div class="dialog-actions"><span class="dialog-button">취소</span><span class="dialog-button primary">확인</span></div>
-                <span class="demo-pointer pointer-register"></span>
-                <span class="click-pulse click-register"></span>
-              </div>
 
               <div class="registered-result">
                 <span class="toast-symbol">✓</span>
-                <span class="toast-message">현재 탐색기 항목을 등록했습니다.</span>
+                <span class="toast-message">선택한 항목 3개를 등록했습니다.</span>
               </div>
             </div>
 
             <ol class="motion-steps" aria-label="탐색기 빠른 등록 동작 순서">
-              <li>탐색기에서 파일·폴더 선택</li>
-              <li>Ctrl + Shift + Space 후 이름 확인</li>
-              <li>빠른 실행 항목 등록 완료</li>
+              <li>탐색기에서 여러 파일·폴더 선택</li>
+              <li>Ctrl + Shift + Space 입력</li>
+              <li>선택 순서대로 한 번에 등록</li>
             </ol>
             <div class="motion-controls">
               <span>화면에 보이면 1회 자동 재생</span>
@@ -1307,7 +1316,7 @@
               <li>파일·폴더·웹 링크를 동일한 패널에서 관리</li>
               <li>키보드 전체 후킹 대신 Windows 공식 전역 단축키 API 사용</li>
               <li>한글 경로, 혼합 DPI, 다중 모니터 환경 대응</li>
-              <li>설정 백업, 경로 상태 확인, 삭제 실행취소 제공</li>
+              <li>미리보기 기반 설정 가져오기·내보내기와 삭제 실행취소 제공</li>
               <li>기본적으로 사용자 바로가기 정보를 외부로 전송하지 않음</li>
             </ul>
           </article>
@@ -1317,7 +1326,7 @@
               <li>Windows 10/11 x64 전용이며 macOS·Linux는 지원하지 않음</li>
               <li>단일 EXE 특성상 최초 실행이 반복 실행보다 느릴 수 있음</li>
               <li>일부 IME·IDE가 같은 단축키를 사용하면 조합 변경 필요</li>
-              <li>탐색기 빠른 등록은 Windows 파일 탐색기의 실제 경로만 지원</li>
+              <li>탐색기 빠른 등록은 Windows 파일 탐색기의 실제 경로만 지원하며 한 번에 최대 50개</li>
               <li>연결이 끊긴 네트워크 경로는 경고 상태로 표시될 수 있음</li>
               <li>현재 공개 EXE는 코드 서명이 없어 SmartScreen 경고 가능</li>
             </ul>
@@ -1354,7 +1363,7 @@
             <div class="security-item"><strong>로컬 설정 저장</strong><p>바로가기 정보는 %APPDATA% 아래 JSON에 저장됩니다.</p></div>
             <div class="security-item"><strong>선택형 업데이트 확인</strong><p>직접 켠 경우에만 GitHub 공개 릴리스 정보를 요청합니다.</p></div>
           </div>
-          <div class="warning-box"><strong>코드 서명 안내:</strong> v1.2.4 공개 파일은 Authenticode 미서명 파일입니다. GitHub 공식 Release에서 다운로드하고 Release에 기재된 SHA-256 해시를 확인하세요.</div>
+          <div class="warning-box"><strong>코드 서명 안내:</strong> 현재 공개 EXE는 Authenticode 미서명 파일입니다. GitHub 공식 Release에서 다운로드하고 Release에 기재된 SHA-256 해시를 확인하세요.</div>
         </div>
       </div>
     </section>
@@ -1384,6 +1393,8 @@
           <details><summary>정말 설치가 필요 없나요?</summary><p>네. QuickAccess.exe를 원하는 폴더에 두고 실행하면 됩니다. 다만 설정, 백업과 로그는 사용자 AppData에 저장되며, Windows 자동 실행을 켜면 현재 사용자 시작프로그램 레지스트리에 실행 경로를 등록합니다.</p></details>
           <details><summary>설정창의 X를 눌러도 프로그램이 남아 있어요.</summary><p>정상입니다. 전역 단축키를 받기 위해 시스템 트레이에 상주합니다. 완전히 종료하려면 트레이의 QuickAccess 아이콘을 우클릭하고 ‘종료’를 선택하세요.</p></details>
           <details><summary>새 버전으로 바꾸면 자동 실행 경로도 바뀌나요?</summary><p>기존 버전을 트레이에서 완전히 종료하고 새 EXE를 최종 위치에서 한 번 실행하면, 자동 실행이 켜져 있는 경우 해당 새 경로로 등록을 복구합니다.</p></details>
+          <details><summary>다른 PC로 바로가기 설정을 옮길 수 있나요?</summary><p>환경 설정의 앱 정보 화면에서 설정을 내보낸 뒤 다른 PC에서 가져올 수 있습니다. 가져오기 전에 추가·변경·충돌 항목을 확인하고 기존 설정에 병합하거나 전체 교체할 수 있습니다.</p></details>
+          <details><summary>Windows 시작 시 실행이 켜졌는데 동작하지 않으면요?</summary><p>v2는 설정값뿐 아니라 Windows에 실제로 등록된 실행 경로를 함께 확인합니다. 누락되거나 이전 EXE 경로가 남아 있으면 현재 실행 파일 경로로 다시 맞출 수 있습니다.</p></details>
           <details><summary>삭제하려면 어떻게 하나요?</summary><p>트레이에서 종료하고 환경 설정에서 Windows 자동 실행을 끈 뒤 EXE를 삭제합니다. 개인 설정까지 지우려면 %APPDATA%\QuickAccess와 %LOCALAPPDATA%\QuickAccess 폴더를 선택적으로 삭제하면 됩니다.</p></details>
         </div>
       </div>
@@ -1391,15 +1402,15 @@
 
     <section class="cta-section" aria-label="다운로드 안내">
       <div class="container cta-panel">
-        <div><h2>반복해서 찾는 시간을<br>한 번의 단축키로 바꿔보세요.</h2><p>QuickAccess Launcher v1.2.4 · Windows 10/11 x64 · Portable EXE</p></div>
-        <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v1.2.4" target="_blank" rel="noopener noreferrer">공식 Release 열기</a>
+        <div><h2>반복해서 찾는 시간을<br>한 번의 단축키로 바꿔보세요.</h2><p>QuickAccess Launcher · Windows 10/11 x64 · Portable EXE · v2 기능 소개</p></div>
+        <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/latest" target="_blank" rel="noopener noreferrer">최신 공식 Release 열기</a>
       </div>
     </section>
   </main>
 
   <footer>
     <div class="container footer-grid">
-      <div class="footer-copy">QuickAccess Launcher · MIT License · Maintained by Daksle · v1.2.4</div>
+      <div class="footer-copy">QuickAccess Launcher · MIT License · Maintained by Daksle · v2 기능 소개</div>
       <div class="footer-links">
         <a href="https://github.com/Daksle-number-13/quickaccess-launcher" target="_blank" rel="noopener noreferrer">GitHub 저장소</a>
         <a href="../output/pdf/QuickAccess_Easy_Manual_KO.pdf">쉬운 사용 설명서</a>

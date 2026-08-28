@@ -9,16 +9,25 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
+
 class ExplorerErrorCode(str, Enum):
     UNAVAILABLE = "unavailable"
     NO_FOREGROUND_EXPLORER = "no_foreground_explorer"
     NO_FILESYSTEM_PATH = "no_filesystem_path"
+    TOO_MANY_SELECTED = "too_many_selected"
     COM_FAILURE = "com_failure"
 
 
 class ExplorerTargetSource(str, Enum):
     SELECTION = "selection"
     CURRENT_FOLDER = "current_folder"
+
+
+@dataclass(frozen=True, slots=True)
+class ExplorerTarget:
+    path: str
+    suggested_name: str
+    item_type: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +41,7 @@ class ExplorerTargetResult:
     error_code: ExplorerErrorCode | None = None
     error: str | None = None
     detail: str | None = None
+    targets: tuple[ExplorerTarget, ...] = ()
 
     @classmethod
     def failure(
@@ -95,11 +105,13 @@ def _suggested_name(path: str) -> str:
 
 
 class ExplorerQuickAddService:
-    """Resolve the first selected item, or current folder, in foreground Explorer.
+    """Resolve selected items, or the current folder, in foreground Explorer.
 
     The public method never raises.  It initializes COM on the calling thread,
     so callers may safely invoke it from a background worker.
     """
+
+    MAX_SELECTED_ITEMS = 50
 
     def __init__(
         self,
@@ -174,20 +186,27 @@ class ExplorerQuickAddService:
                     hwnd=hwnd,
                 )
 
-            target, source, item_type = self._target_from_window(explorer_window)
-            if target is None:
+            targets, source, error_code = self._targets_from_window(explorer_window)
+            if not targets:
+                message = (
+                    "한 번에 최대 50개까지 등록할 수 있습니다"
+                    if error_code is ExplorerErrorCode.TOO_MANY_SELECTED
+                    else "현재 탐색기 위치를 파일 경로로 변환할 수 없습니다"
+                )
                 return ExplorerTargetResult.failure(
-                    ExplorerErrorCode.NO_FILESYSTEM_PATH,
-                    "현재 탐색기 위치를 파일 경로로 변환할 수 없습니다",
+                    error_code or ExplorerErrorCode.NO_FILESYSTEM_PATH,
+                    message,
                     hwnd=hwnd,
                 )
+            first = targets[0]
             return ExplorerTargetResult(
                 True,
-                path=target,
-                suggested_name=_suggested_name(target),
-                item_type=item_type,
+                path=first.path,
+                suggested_name=first.suggested_name,
+                item_type=first.item_type,
                 source=source,
                 hwnd=hwnd,
+                targets=targets,
             )
         except Exception as error:  # COM/window races are expected external failures.
             return ExplorerTargetResult.failure(
@@ -218,36 +237,80 @@ class ExplorerQuickAddService:
                 continue
         return None
 
-    @staticmethod
-    def _target_from_window(
+    @classmethod
+    def _targets_from_window(
+        cls,
         explorer_window: object,
-    ) -> tuple[str | None, ExplorerTargetSource | None, str | None]:
+    ) -> tuple[
+        tuple[ExplorerTarget, ...],
+        ExplorerTargetSource | None,
+        ExplorerErrorCode | None,
+    ]:
         document = explorer_window.Document
         selected_items = document.SelectedItems()
-        if int(selected_items.Count) > 0:
-            selected_item = selected_items.Item(0)
-            selected_path = _filesystem_path(selected_item.Path)
-            if selected_path is None:
-                return None, ExplorerTargetSource.SELECTION, None
+        selected_count = int(selected_items.Count)
+        if selected_count > 0:
+            if selected_count > cls.MAX_SELECTED_ITEMS:
+                return (
+                    (),
+                    ExplorerTargetSource.SELECTION,
+                    ExplorerErrorCode.TOO_MANY_SELECTED,
+                )
 
-            try:
-                item_type = "folder" if bool(selected_item.IsFolder) else "file"
-            except Exception:
-                # COM FolderItem normally supplies IsFolder.  If a shell
-                # extension does not, avoid a synchronous filesystem probe on
-                # Tk's thread.  Treat the uncommon unknown selection as a file.
-                item_type = "file"
-            return selected_path, ExplorerTargetSource.SELECTION, item_type
+            targets: list[ExplorerTarget] = []
+            seen_paths: set[str] = set()
+            for index in range(selected_count):
+                selected_item = selected_items.Item(index)
+                target = cls._target_from_selected_item(selected_item)
+                if target is None:
+                    # Multi-selection is atomic: one virtual/unresolvable item
+                    # rejects the complete selection instead of silently adding
+                    # only a surprising subset.
+                    return (
+                        (),
+                        ExplorerTargetSource.SELECTION,
+                        ExplorerErrorCode.NO_FILESYSTEM_PATH,
+                    )
+                identity = ntpath.normcase(ntpath.normpath(target.path))
+                if identity in seen_paths:
+                    continue
+                seen_paths.add(identity)
+                targets.append(target)
+            return tuple(targets), ExplorerTargetSource.SELECTION, None
 
         folder_path = _filesystem_path(document.Folder.Self.Path)
         if folder_path is not None:
-            return folder_path, ExplorerTargetSource.CURRENT_FOLDER, "folder"
-        return None, None, None
+            return (
+                (ExplorerTarget(folder_path, _suggested_name(folder_path), "folder"),),
+                ExplorerTargetSource.CURRENT_FOLDER,
+                None,
+            )
+        return (), None, ExplorerErrorCode.NO_FILESYSTEM_PATH
+
+    @staticmethod
+    def _target_from_selected_item(selected_item: object) -> ExplorerTarget | None:
+        selected_path = _filesystem_path(selected_item.Path)
+        if selected_path is None:
+            return None
+
+        try:
+            item_type = "folder" if bool(selected_item.IsFolder) else "file"
+        except Exception:
+            # COM FolderItem normally supplies IsFolder.  If a shell
+            # extension does not, avoid a synchronous filesystem probe on
+            # Tk's thread.  Treat the uncommon unknown selection as a file.
+            item_type = "file"
+        return ExplorerTarget(
+            selected_path,
+            _suggested_name(selected_path),
+            item_type,
+        )
 
 
 __all__ = [
     "ExplorerErrorCode",
     "ExplorerQuickAddService",
+    "ExplorerTarget",
     "ExplorerTargetResult",
     "ExplorerTargetSource",
     "get_foreground_window",

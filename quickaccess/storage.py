@@ -13,13 +13,14 @@ import threading
 import time
 from typing import Callable, TypeVar
 
-from .models import LauncherConfig
+from .models import LauncherConfig, UnsupportedSchemaVersionError
 
 
 _T = TypeVar("_T")
 
 _REPLACE_RETRY_WINERRORS = frozenset({5, 32})
 _REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1)
+DEFAULT_MAX_CORRUPT_BACKUPS = 5
 
 
 def _atomic_replace(
@@ -76,9 +77,17 @@ class ConfigStore:
         path: str | os.PathLike[str] | None = None,
         *,
         user_home: str | os.PathLike[str] | None = None,
+        max_corrupt_backups: int = DEFAULT_MAX_CORRUPT_BACKUPS,
     ) -> None:
+        if isinstance(max_corrupt_backups, bool) or not isinstance(
+            max_corrupt_backups, int
+        ):
+            raise TypeError("max_corrupt_backups must be an integer")
+        if max_corrupt_backups < 1:
+            raise ValueError("max_corrupt_backups must be at least one")
         self.path = Path(path) if path is not None else self.default_path()
         self._user_home = user_home
+        self._max_corrupt_backups = max_corrupt_backups
         self._lock = threading.RLock()
 
     @staticmethod
@@ -110,6 +119,10 @@ class ConfigStore:
                     raw_data,
                     user_home=self._user_home,
                 )
+            except UnsupportedSchemaVersionError:
+                # A newer app owns this valid file.  Moving or rewriting it as
+                # if it were corrupt would destroy data during a downgrade.
+                raise
             except (TypeError, ValueError):
                 return self._recover_unlocked()
 
@@ -135,6 +148,8 @@ class ConfigStore:
                 shutil.copy2(self.path, backup_path)
             if migrated:
                 self._save_unlocked(config)
+            if backup_path is not None:
+                self._prune_corrupt_backups_unlocked(keep=backup_path)
             return LoadResult(
                 config=config,
                 migrated=migrated,
@@ -175,6 +190,7 @@ class ConfigStore:
         if config is None:
             config = LauncherConfig.default(user_home=self._user_home)
         self._save_unlocked(config)
+        self._prune_corrupt_backups_unlocked(keep=backup_path)
         return LoadResult(
             config=config,
             recovered=True,
@@ -207,6 +223,41 @@ class ConfigStore:
             )
             counter += 1
         return candidate
+
+    def _prune_corrupt_backups_unlocked(self, *, keep: Path) -> None:
+        """Best-effort retention for generated corrupt snapshots.
+
+        The single rolling ``.bak`` file has a distinct name and is never part
+        of this set.  ``keep`` protects the snapshot created for the current
+        recovery even if unrelated files have surprising timestamps.
+        """
+
+        suffix = self.path.suffix or ".json"
+        stem = self.path.stem if self.path.suffix else self.path.name
+        try:
+            backups = sorted(
+                (
+                    candidate
+                    for candidate in self.path.parent.glob(
+                        f"{stem}.corrupt-*{suffix}"
+                    )
+                    if candidate.is_file()
+                ),
+                key=lambda candidate: candidate.name,
+            )
+        except OSError:
+            return
+        excess = len(backups) - self._max_corrupt_backups
+        for candidate in backups:
+            if excess <= 0:
+                break
+            if candidate == keep:
+                continue
+            try:
+                candidate.unlink()
+            except OSError:
+                continue
+            excess -= 1
 
     @staticmethod
     def _discarded_invalid_items(raw_data: object, config: LauncherConfig) -> bool:

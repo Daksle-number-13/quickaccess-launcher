@@ -6,13 +6,14 @@ import argparse
 from copy import deepcopy
 import ctypes
 import logging
+import ntpath
 import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Any
 
 import customtkinter as ctk
@@ -36,21 +37,34 @@ from .commands import (
     UpdateAvailableCommand,
     ValidationResultCommand,
 )
+from .diagnostics import collect_diagnostics
 from .logging_setup import close_logging, configure_logging, install_exception_hooks
 from .models import LauncherConfig, normalize_web_url
 from .platform import enable_dpi_awareness, require_windows
 from .services.explorer import (
     ExplorerQuickAddService,
+    ExplorerTarget,
     ExplorerTargetResult,
     get_foreground_window,
+)
+from .services.config_transfer import (
+    ConfigImportPreview,
+    apply_config_import,
+    preview_config_import,
+    write_portable_config,
 )
 from .services.hotkeys import NativeHotkeyService
 from .services.icons import IconImage, IconService, icon_key
 from .services.launcher import FileLauncher
 from .services.launcher import LaunchResult
-from .services.monitor import NativeMonitorService, Point, Rect
-from .services.singleton import SingleInstanceGuard
-from .services.startup import StartupManager
+from .services.monitor import MonitorContext, NativeMonitorService, Point, Rect
+from .services.singleton import InstanceRequest, SingleInstanceGuard
+from .services.startup import (
+    StartupManager,
+    StartupRegistrationState,
+    StartupRegistrationStatus,
+    build_startup_command,
+)
 from .services.tray import TrayService
 from .services.update_check import DEFAULT_REPO, UpdateCheckResult, check_for_update
 from .services.validation import PathStatus, PathValidationService, ValidationResult
@@ -62,9 +76,11 @@ from .ui.settings import SettingsActions, SettingsWindow
 
 LOGGER = logging.getLogger(__name__)
 MUTEX_NAME = "QuickAccessLauncher-2D6B7C9A-0145-4D80-A84C-8297515C16B2"
-PUMP_INTERVAL_MS = 16
+PUMP_INTERVAL_MS = 8
+MONITOR_REFRESH_INTERVAL_MS = 1000
 QUICK_ADD_TIMEOUT_MS = 8000
 MAX_CONCURRENT_LAUNCHES = 4
+MAX_IMPORT_BYTES = 2 * 1024 * 1024
 CTK_APPEARANCE_MODES = {
     "system": "System",
     "light": "Light",
@@ -98,6 +114,7 @@ class QuickAccessApp:
         *,
         started_at_logon: bool = False,
         smoke_test: bool = False,
+        instance_guard: SingleInstanceGuard | None = None,
     ) -> None:
         self.root = root
         self.store = store
@@ -105,12 +122,14 @@ class QuickAccessApp:
         self.load_result = load_result
         self.started_at_logon = started_at_logon
         self.smoke_test = smoke_test
+        self._instance_guard = instance_guard
         self.bus = CommandBus()
         self.toast = ToastManager(root)
         self.monitor = NativeMonitorService()
         self.launcher = FileLauncher()
         self.explorer = ExplorerQuickAddService()
         self.startup = StartupManager()
+        self._startup_status: StartupRegistrationStatus | None = None
         self.hotkeys = NativeHotkeyService(on_callback_error=self._background_error)
         self.tray = TrayService(self.bus)
         self.validator = PathValidationService(
@@ -126,9 +145,12 @@ class QuickAccessApp:
         self.statuses: dict[str, PathStatus] = {}
         self.icon_images: dict[str, ctk.CTkImage] = {}
         self.popup: PopupPanel | None = None
+        self._popup_pool: dict[tuple[str, int | None], PopupPanel] = {}
+        self._popup_contexts: dict[tuple[str, int | None], MonitorContext] = {}
         self.settings: SettingsWindow | None = None
         self._last_anchor: Point | None = None
         self._last_work_area: Rect | None = None
+        self._last_monitor_context: MonitorContext | None = None
         self._stopping = False
         self._quick_add_inflight = False
         self._quick_add_generation = 0
@@ -136,6 +158,10 @@ class QuickAccessApp:
         self._launch_inflight: set[str] = set()
         self._launch_slots = threading.BoundedSemaphore(MAX_CONCURRENT_LAUNCHES)
         self._popup_refresh_after: str | None = None
+        self._popup_refresh_requires_layout = False
+        self._icon_request_after: str | None = None
+        self._monitor_refresh_after: str | None = None
+        self._monitor_topology_signature: tuple[object, ...] = ()
         self._update_check_after: str | None = None
         self._update_check_generation = 0
         self._update_check_inflight_generations: set[int] = set()
@@ -152,10 +178,10 @@ class QuickAccessApp:
         if not self.smoke_test:
             self._synchronize_startup_registration()
 
-        # Finish the one expensive widget-tree build before the global
-        # hotkeys become available.  Startup may take a little longer, but
-        # once Ctrl+Space can be received its popup is already realized and
-        # the display path never races an idle-time cold render.
+        # Finish one widget-tree build per monitor before the global hotkeys
+        # become available.  Startup may take a little longer, but once
+        # Ctrl+Space can be received the correctly scaled popup is already
+        # realized for every active display.
         self._prewarm_popup()
 
         hotkey_ready = self._configure_hotkeys(
@@ -179,6 +205,7 @@ class QuickAccessApp:
                 raise RuntimeError("smoke test could not start the system tray") from error
 
         self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
+        self._schedule_monitor_refresh()
         self._validate_all_paths()
         self._request_all_icons()
         if not self.smoke_test and self.config.check_updates:
@@ -221,7 +248,8 @@ class QuickAccessApp:
     def _drain_commands(self) -> None:
         if self._stopping:
             return
-        for command in self.bus.drain(40):
+        self._drain_instance_requests()
+        for command in self.bus.drain_for_ui(40):
             try:
                 self._handle_command(command)
             except Exception as error:
@@ -229,6 +257,29 @@ class QuickAccessApp:
                 self.toast.show(f"요청을 처리하지 못했습니다: {error}", kind="error")
         if not self._stopping:
             self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
+
+    def _drain_instance_requests(self) -> None:
+        """Consume later-process activation requests on the existing UI pump."""
+
+        guard = self._instance_guard
+        if guard is None:
+            return
+        try:
+            requests = guard.drain_requests()
+        except Exception:
+            # Activation is a convenience channel.  The resident process and
+            # its authoritative mutex must remain healthy if it is unavailable.
+            LOGGER.exception("Unable to drain single-instance activation requests")
+            return
+
+        for request in requests:
+            try:
+                if request is InstanceRequest.OPEN_SETTINGS:
+                    self.open_settings()
+                elif request is InstanceRequest.SHOW_PANEL:
+                    self.open_panel()
+            except Exception:
+                LOGGER.exception("Unable to handle single-instance request: %s", request)
 
     def _handle_command(self, command: AppCommand) -> None:
         if isinstance(command, OpenPanelCommand):
@@ -313,7 +364,7 @@ class QuickAccessApp:
                 if cursor_position is not None
                 else self.monitor.get_cursor_position()
             )
-            work_area = self.monitor.get_monitor_work_area(anchor)
+            monitor_context = self._monitor_context_at(anchor)
         except Exception:
             LOGGER.exception("Falling back to primary monitor geometry")
             anchor = Point(20, 20) if cursor_position is None else Point(*cursor_position)
@@ -323,62 +374,503 @@ class QuickAccessApp:
                 max(320, self.root.winfo_screenwidth()),
                 max(240, self.root.winfo_screenheight()),
             )
+            monitor_context = MonitorContext(
+                identifier="fallback-primary",
+                bounds=work_area,
+                work_area=work_area,
+                scale=None,
+            )
 
-        popup = self._ensure_popup()
+        work_area = monitor_context.work_area
+        popup = self._ensure_popup(monitor_context)
+        previous_popup = self.popup
+        if previous_popup is not None and previous_popup is not popup:
+            try:
+                if previous_popup.winfo_exists():
+                    previous_popup.hide()
+            except tk.TclError:
+                pass
+        self.popup = popup
         self._last_anchor = anchor
         self._last_work_area = work_area
-        popup.show(self.config, self.statuses, anchor, work_area, icons=self.icon_images)
+        self._last_monitor_context = monitor_context
+        popup.show(
+            self.config,
+            self.statuses,
+            anchor,
+            work_area,
+            icons=self.icon_images,
+            target_dpi_scale=monitor_context.scale,
+        )
+        # Ask again only after the visible frame has been handed back to Tk.
+        # Extraction remains entirely off the hotkey path, while a transient
+        # shell failure can still recover on a later panel open.
+        self._schedule_icon_requests()
 
-    def _ensure_popup(self) -> PopupPanel:
-        if self.popup is None or not self.popup.winfo_exists():
-            self.popup = PopupPanel(
-                self.root,
-                PopupActions(
-                    activate=self.activate_item,
-                    relocate=self.relocate_item,
-                    open_settings=self.open_settings,
-                ),
-            )
-        return self.popup
+    def _monitor_context_at(self, anchor: Point) -> MonitorContext:
+        getter = getattr(self.monitor, "get_monitor_context", None)
+        if callable(getter):
+            return getter(anchor)
+        # Compatibility fallback for simple monitor adapters and older
+        # Windows versions where only work-area lookup is available.
+        work_area = self.monitor.get_monitor_work_area(anchor)
+        identifier = (
+            f"work-area:{work_area.left}:{work_area.top}:"
+            f"{work_area.right}:{work_area.bottom}"
+        )
+        return MonitorContext(identifier, work_area, work_area, None)
+
+    def _new_popup(self) -> PopupPanel:
+        return PopupPanel(
+            self.root,
+            PopupActions(
+                activate=self.activate_item,
+                relocate=self.relocate_item,
+                open_settings=self.open_settings,
+            ),
+        )
+
+    def _ensure_popup(
+        self,
+        monitor_context: MonitorContext | None = None,
+    ) -> PopupPanel:
+        if monitor_context is None:
+            if self.popup is None or not self.popup.winfo_exists():
+                self.popup = self._new_popup()
+            return self.popup
+
+        key = monitor_context.cache_key
+        popup = self._popup_pool.get(key)
+        try:
+            popup_exists = popup is not None and bool(popup.winfo_exists())
+        except tk.TclError:
+            popup_exists = False
+        if popup_exists:
+            self._popup_contexts[key] = monitor_context
+            return popup
+        if popup is not None:
+            self._popup_pool.pop(key, None)
+            self._popup_contexts.pop(key, None)
+
+        # A DPI setting change creates one fresh pre-scaled popup for that
+        # display.  Retire any old-scale entry for the same device so a stale
+        # CustomTkinter window can never be selected later.
+        for stale_key, stale_popup in tuple(self._popup_pool.items()):
+            if stale_key[0] != monitor_context.identifier or stale_key == key:
+                continue
+            self._popup_pool.pop(stale_key, None)
+            self._popup_contexts.pop(stale_key, None)
+            try:
+                stale_popup.hide()
+                stale_popup.destroy()
+            except tk.TclError:
+                pass
+            if self.popup is stale_popup:
+                self.popup = None
+
+        popup = self._new_popup()
+        self._popup_pool[key] = popup
+        self._popup_contexts[key] = monitor_context
+        return popup
 
     def _prewarm_popup(self) -> None:
         if self._stopping:
             return
         try:
-            anchor = self.monitor.get_cursor_position()
-            work_area = self.monitor.get_monitor_work_area(anchor)
-            self._ensure_popup().prepare(
-                self.config, self.statuses, work_area, icons=self.icon_images
+            getter = getattr(self.monitor, "get_monitor_contexts", None)
+            if callable(getter):
+                monitor_contexts = tuple(getter())
+            else:
+                anchor = self.monitor.get_cursor_position()
+                monitor_contexts = (self._monitor_context_at(anchor),)
+            if not monitor_contexts:
+                raise RuntimeError("Windows returned no active monitors")
+
+            live_keys = {context.cache_key for context in monitor_contexts}
+            for context in monitor_contexts:
+                self._ensure_popup(context).prepare(
+                    self.config,
+                    self.statuses,
+                    context.work_area,
+                    icons=self.icon_images,
+                    target_dpi_scale=context.scale,
+                )
+            self._discard_stale_popups(live_keys)
+            self._monitor_topology_signature = self._topology_signature(
+                monitor_contexts
             )
         except Exception:
             # Prewarming is only a latency optimization.  The normal open path
             # retains its complete monitor fallback and error handling.
             LOGGER.exception("Unable to prewarm launcher popup")
 
+    @staticmethod
+    def _topology_signature(
+        monitor_contexts: tuple[MonitorContext, ...],
+    ) -> tuple[object, ...]:
+        return tuple(
+            (
+                context.identifier,
+                context.bounds,
+                context.work_area,
+                context.cache_key[1],
+            )
+            for context in monitor_contexts
+        )
+
+    def _schedule_monitor_refresh(self) -> None:
+        if self._stopping or self._monitor_refresh_after is not None:
+            return
+        self._monitor_refresh_after = self.root.after(
+            MONITOR_REFRESH_INTERVAL_MS,
+            self._poll_monitor_topology,
+        )
+
+    def _poll_monitor_topology(self) -> None:
+        self._monitor_refresh_after = None
+        if self._stopping:
+            return
+        try:
+            getter = getattr(self.monitor, "get_monitor_contexts", None)
+            if callable(getter):
+                monitor_contexts = tuple(getter())
+                signature = self._topology_signature(monitor_contexts)
+                if monitor_contexts and signature != self._monitor_topology_signature:
+                    live_keys = {context.cache_key for context in monitor_contexts}
+                    for context in monitor_contexts:
+                        self._ensure_popup(context).prepare(
+                            self.config,
+                            self.statuses,
+                            context.work_area,
+                            icons=self.icon_images,
+                            target_dpi_scale=context.scale,
+                        )
+                    self._discard_stale_popups(live_keys)
+                    self._monitor_topology_signature = signature
+        except Exception:
+            LOGGER.exception("Unable to refresh monitor topology")
+        finally:
+            self._schedule_monitor_refresh()
+
+    def _cancel_monitor_refresh(self) -> None:
+        after_id, self._monitor_refresh_after = self._monitor_refresh_after, None
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _discard_stale_popups(
+        self,
+        live_keys: set[tuple[str, int | None]],
+    ) -> None:
+        for key, popup in tuple(self._popup_pool.items()):
+            if key in live_keys:
+                continue
+            self._popup_pool.pop(key, None)
+            self._popup_contexts.pop(key, None)
+            try:
+                popup.hide()
+                popup.destroy()
+            except tk.TclError:
+                pass
+            if self.popup is popup:
+                self.popup = None
+
     def open_settings(self) -> None:
-        if self.popup is not None:
-            self.popup.hide()
+        popups = list(self._popup_pool.values())
+        if self.popup is not None and all(
+            popup is not self.popup for popup in popups
+        ):
+            popups.append(self.popup)
+        for popup in popups:
+            try:
+                popup.hide()
+            except tk.TclError:
+                pass
         if self.settings is None or not self.settings.winfo_exists():
             self.settings = SettingsWindow(
                 self.root,
-                SettingsActions(
-                    get_config=self.get_config,
-                    add_item=self.add_item,
-                    delete_item=self.delete_item,
-                    rename_item=self.rename_item,
-                    move_item=self.move_item,
-                    set_appearance_mode=self.set_appearance_mode,
-                    set_columns=self.set_columns,
-                    set_startup=self.set_startup,
-                    set_update_checks=self.set_update_checks,
-                    set_hotkeys=self.set_hotkeys,
-                    edit_item=self.edit_item,
-                ),
+                self._build_settings_actions(),
             )
         self.settings.show()
 
+    def _build_settings_actions(self) -> SettingsActions:
+        return SettingsActions(
+            get_config=self.get_config,
+            add_item=self.add_item,
+            delete_item=self.delete_item,
+            rename_item=self.rename_item,
+            move_item=self.move_item,
+            set_appearance_mode=self.set_appearance_mode,
+            set_columns=self.set_columns,
+            set_startup=self.set_startup,
+            set_update_checks=self.set_update_checks,
+            set_hotkeys=self.set_hotkeys,
+            edit_item=self.edit_item,
+            get_startup_status=self.get_startup_status,
+            import_config=self.import_config,
+            export_config=self.export_config,
+            copy_diagnostics=self.copy_diagnostics,
+        )
+
     def get_config(self) -> LauncherConfig:
         return deepcopy(self.config)
+
+    def get_startup_status(self) -> StartupRegistrationStatus:
+        """Return actual Windows startup state without changing user intent."""
+
+        executable, arguments = startup_invocation()
+        try:
+            status = self.startup.inspect(
+                self.config.run_on_startup,
+                executable,
+                arguments,
+            )
+        except Exception as error:
+            status = StartupRegistrationStatus(
+                state=StartupRegistrationState.UNREADABLE,
+                desired_enabled=bool(self.config.run_on_startup),
+                expected_command=build_startup_command(executable, arguments),
+                error=f"{type(error).__name__}: {error}",
+            )
+        self._startup_status = status
+        return status
+
+    def export_config(self) -> bool:
+        """Let the user atomically export a portable, human-readable backup."""
+
+        destination = filedialog.asksaveasfilename(
+            parent=self._dialog_parent(),
+            title="QuickAccess 설정 내보내기",
+            defaultextension=".json",
+            initialfile="quickaccess-settings.json",
+            filetypes=(("JSON 설정 파일", "*.json"), ("모든 파일", "*.*")),
+        )
+        if not destination:
+            return False
+        try:
+            write_portable_config(destination, self.config)
+        except Exception as error:
+            LOGGER.exception("Unable to export portable configuration")
+            self.toast.show(f"설정을 내보내지 못했습니다: {error}", kind="error")
+            return False
+        self.toast.show("설정 백업 파일을 저장했습니다.", kind="success")
+        return True
+
+    def import_config(self) -> bool:
+        """Preview and safely apply a user-selected portable configuration."""
+
+        source_path = filedialog.askopenfilename(
+            parent=self._dialog_parent(),
+            title="QuickAccess 설정 가져오기",
+            filetypes=(("JSON 설정 파일", "*.json"), ("모든 파일", "*.*")),
+        )
+        if not source_path:
+            return False
+        try:
+            with open(source_path, "rb") as stream:
+                source = stream.read(MAX_IMPORT_BYTES + 1)
+            if len(source) > MAX_IMPORT_BYTES:
+                raise ValueError("가져오기 파일은 2MB 이하여야 합니다")
+        except Exception as error:
+            LOGGER.exception("Unable to read portable configuration")
+            self.toast.show(f"설정 파일을 읽지 못했습니다: {error}", kind="error")
+            return False
+
+        merge_choice = messagebox.askyesnocancel(
+            "가져오기 방식",
+            "기존 설정에 항목을 합칠까요?\n\n"
+            "예: 현재 설정 유지 + 항목 병합\n"
+            "아니요: 파일 내용으로 전체 교체\n"
+            "취소: 가져오기 중단",
+            parent=self._dialog_parent(),
+        )
+        if merge_choice is None:
+            return False
+        mode = "merge" if merge_choice else "replace"
+        try:
+            preview = preview_config_import(self.config, source, mode=mode)
+        except Exception as error:
+            LOGGER.exception("Unable to preview portable configuration")
+            self.toast.show(f"설정 파일을 분석하지 못했습니다: {error}", kind="error")
+            return False
+
+        summary = self._format_import_preview(preview)
+        if not preview.changed:
+            messagebox.showinfo(
+                "가져오기 미리보기",
+                summary + "\n\n적용할 변경 사항이 없습니다.",
+                parent=self._dialog_parent(),
+            )
+            return False
+        if not messagebox.askyesno(
+            "가져오기 미리보기",
+            summary + "\n\n이 변경 사항을 적용할까요?",
+            parent=self._dialog_parent(),
+        ):
+            return False
+        if preview.mode == "replace" and (
+            preview.removed_item_ids or preview.settings_changed
+        ):
+            if not messagebox.askyesno(
+                "전체 교체 확인",
+                "현재 바로가기와 앱 설정이 백업 파일 내용으로 교체됩니다.\n"
+                "이 작업은 자동으로 되돌릴 수 없습니다. 계속할까요?",
+                icon="warning",
+                parent=self._dialog_parent(),
+            ):
+                return False
+
+        candidate = apply_config_import(preview)
+        if not self._apply_imported_config(candidate):
+            return False
+        self.toast.show("설정을 안전하게 가져왔습니다.", kind="success")
+        return True
+
+    @staticmethod
+    def _format_import_preview(preview: ConfigImportPreview) -> str:
+        counts = preview.counts
+        mode = "기존 설정에 병합" if preview.mode == "merge" else "전체 설정 교체"
+        lines = [
+            f"방식: {mode}",
+            f"추가 {counts['added']}개 · 변경 {counts['updated']}개",
+            f"건너뜀 {counts['skipped']}개 · 제거 {counts['removed']}개",
+        ]
+        if counts["invalid"] or counts["conflicts"]:
+            lines.append(
+                f"적용 제외: 잘못된 항목 {counts['invalid']}개 · 충돌 {counts['conflicts']}개"
+            )
+        if preview.settings_changed:
+            lines.append("단축키·화면·자동 실행 등 앱 설정도 변경됩니다.")
+        return "\n".join(lines)
+
+    def _apply_imported_config(self, candidate: LauncherConfig) -> bool:
+        """Commit an imported config with compensating runtime rollbacks."""
+
+        previous = deepcopy(self.config)
+        hotkeys_changed = (
+            candidate.hotkey != previous.hotkey
+            or candidate.quick_add_hotkey != previous.quick_add_hotkey
+        )
+        startup_changed = candidate.run_on_startup != previous.run_on_startup
+        appearance_changed = candidate.appearance_mode != previous.appearance_mode
+        hotkeys_attempted = False
+        startup_applied = False
+        appearance_applied = False
+        executable, arguments = startup_invocation()
+
+        try:
+            if hotkeys_changed:
+                # Native registration can fail after releasing one or both old
+                # bindings.  Record the attempt before entering the service so
+                # every failure path explicitly restores the previous pair.
+                hotkeys_attempted = True
+                if not self._configure_hotkeys(
+                    candidate.hotkey,
+                    candidate.quick_add_hotkey,
+                    show_error=True,
+                ):
+                    raise RuntimeError("가져온 단축키를 등록할 수 없습니다")
+                bindings = self.hotkeys.bindings
+                candidate.hotkey = bindings.get("panel", candidate.hotkey)
+                candidate.quick_add_hotkey = bindings.get(
+                    "quick_add", candidate.quick_add_hotkey
+                )
+                candidate.normalize()
+
+            if startup_changed:
+                # Reconcile can write the registry and still return an
+                # unverifiable post-state.  Mark the attempt first so every
+                # failure path restores the previous user preference.
+                startup_applied = True
+                status = self.startup.reconcile(
+                    candidate.run_on_startup,
+                    executable,
+                    arguments,
+                )
+                self._require_startup_in_sync(status)
+                self._startup_status = status
+
+            if appearance_changed:
+                appearance_applied = True
+                apply_appearance_mode(candidate.appearance_mode)
+
+            self.store.save(candidate)
+        except Exception as error:
+            LOGGER.exception("Unable to apply imported configuration")
+            rollback_errors: list[str] = []
+            if appearance_applied:
+                try:
+                    apply_appearance_mode(previous.appearance_mode)
+                except Exception as rollback_error:
+                    rollback_errors.append(f"화면 스타일: {rollback_error}")
+            if startup_applied:
+                try:
+                    status = self.startup.reconcile(
+                        previous.run_on_startup,
+                        executable,
+                        arguments,
+                    )
+                    self._require_startup_in_sync(status)
+                    self._startup_status = status
+                except Exception as rollback_error:
+                    rollback_errors.append(f"자동 실행: {rollback_error}")
+            if hotkeys_attempted and not self._configure_hotkeys(
+                previous.hotkey,
+                previous.quick_add_hotkey,
+                show_error=False,
+            ):
+                rollback_errors.append("단축키")
+            detail = f"설정을 가져오지 못했습니다: {error}"
+            if rollback_errors:
+                detail += "\n일부 실행 상태를 복구하지 못했습니다: " + ", ".join(
+                    rollback_errors
+                )
+            self.toast.show(detail, kind="error", duration_ms=7500)
+            return False
+
+        old_items = {item.id: item for item in previous.items}
+        new_items = {item.id: item for item in candidate.items}
+        self.config = candidate
+        if candidate.check_updates != previous.check_updates:
+            self._update_check_generation += 1
+            if candidate.check_updates:
+                self._check_for_update()
+            else:
+                self._cancel_update_check_schedule()
+
+        for item_id, old_item in old_items.items():
+            new_item = new_items.get(item_id)
+            if new_item is None or (
+                new_item.path != old_item.path or new_item.type != old_item.type
+            ):
+                self.validator.cancel(item_id)
+                self.statuses.pop(item_id, None)
+        self._validate_all_paths()
+        self._request_all_icons()
+        self._refresh_visible_popup(layout_required=True)
+        return True
+
+    def copy_diagnostics(self) -> bool:
+        """Copy a privacy-conscious diagnostic report to the clipboard."""
+
+        try:
+            status = self.get_startup_status()
+            report = collect_diagnostics(
+                deepcopy(self.config),
+                startup_status=status,
+            ).render()
+            self.root.clipboard_clear()
+            self.root.clipboard_append(report)
+            self.root.update_idletasks()
+        except Exception as error:
+            LOGGER.exception("Unable to copy diagnostics")
+            self.toast.show(f"진단 정보를 복사하지 못했습니다: {error}", kind="error")
+            return False
+        self.toast.show("개인 경로를 제외한 진단 정보를 복사했습니다.", kind="success")
+        return True
 
     def _commit(self, mutator: Any, error_message: str) -> bool:
         candidate = deepcopy(self.config)
@@ -390,7 +882,7 @@ class QuickAccessApp:
             self.toast.show(f"{error_message}: {error}", kind="error")
             return False
         self.config = candidate
-        self._refresh_visible_popup()
+        self._refresh_visible_popup(layout_required=True)
         return True
 
     def add_item(
@@ -536,22 +1028,55 @@ class QuickAccessApp:
 
     def set_startup(self, enabled: bool) -> bool:
         executable, arguments = startup_invocation()
-        previous = self.config.run_on_startup
+        requested = bool(enabled)
+        previous = bool(self.config.run_on_startup)
         try:
-            self.startup.set_enabled(enabled, executable, arguments)
+            status = self.startup.reconcile(requested, executable, arguments)
+            self._startup_status = status
+            self._require_startup_in_sync(status)
         except Exception as error:
             LOGGER.exception("Unable to update startup registry value")
             self.toast.show(f"자동 실행 설정을 변경하지 못했습니다: {error}", kind="error")
+            if requested != previous:
+                self._rollback_startup_registration(previous, executable, arguments)
             return False
 
         if self._commit(
-            lambda config: setattr(config, "run_on_startup", bool(enabled)),
+            lambda config: setattr(config, "run_on_startup", requested),
             "자동 실행 설정을 저장하지 못했습니다",
         ):
             return True
 
+        self._rollback_startup_registration(previous, executable, arguments)
+        return False
+
+    @staticmethod
+    def _require_startup_in_sync(status: StartupRegistrationStatus) -> None:
+        if status.in_sync:
+            return
+        if status.state is StartupRegistrationState.UNREADABLE:
+            detail = status.error or "Windows 시작프로그램 상태를 읽을 수 없습니다"
+        elif status.desired_enabled:
+            detail = "Windows 시작프로그램에 현재 실행 파일이 등록되지 않았습니다"
+        else:
+            detail = "Windows 시작프로그램 등록이 제거되지 않았습니다"
+        raise RuntimeError(detail)
+
+    def _rollback_startup_registration(
+        self,
+        desired_enabled: bool,
+        executable: str,
+        arguments: tuple[str, ...],
+    ) -> bool:
         try:
-            self.startup.set_enabled(previous, executable, arguments)
+            status = self.startup.reconcile(
+                bool(desired_enabled),
+                executable,
+                arguments,
+            )
+            self._startup_status = status
+            self._require_startup_in_sync(status)
+            return True
         except Exception as rollback_error:
             LOGGER.exception("Unable to roll back startup registry value")
             self.toast.show(
@@ -560,7 +1085,7 @@ class QuickAccessApp:
                 kind="error",
                 duration_ms=7000,
             )
-        return False
+            return False
 
     def set_update_checks(self, enabled: bool) -> bool:
         """Persist the explicit consent controlling GitHub release checks."""
@@ -607,33 +1132,25 @@ class QuickAccessApp:
     def _synchronize_startup_registration(self) -> None:
         executable, arguments = startup_invocation()
         try:
-            self.startup.set_enabled(
+            status = self.startup.reconcile(
                 self.config.run_on_startup,
                 executable,
                 arguments,
             )
+            self._startup_status = status
+            self._require_startup_in_sync(status)
         except Exception as error:
             LOGGER.exception("Unable to register configured startup command")
-            if not self.config.run_on_startup:
-                self.root.after(
-                    250,
-                    lambda: self.toast.show(
-                        f"남아 있는 자동 실행 항목을 정리하지 못했습니다: {error}",
-                        kind="warning",
-                        duration_ms=6000,
-                    ),
-                )
-                return
-            # Do not claim that auto-start is active when the registry write
-            # was rejected by policy or permissions.
-            self._commit(
-                lambda config: setattr(config, "run_on_startup", False),
-                "자동 실행 실패 상태를 저장하지 못했습니다",
+            action = (
+                "등록하지 못했습니다"
+                if self.config.run_on_startup
+                else "남아 있는 항목을 정리하지 못했습니다"
             )
+            warning_message = f"부팅 시 자동 실행을 {action}: {error}"
             self.root.after(
                 250,
-                lambda: self.toast.show(
-                    f"부팅 시 자동 실행을 등록하지 못했습니다: {error}",
+                lambda message=warning_message: self.toast.show(
+                    message,
                     kind="warning",
                     duration_ms=6000,
                 ),
@@ -761,6 +1278,21 @@ class QuickAccessApp:
             except Exception:
                 LOGGER.exception("Failed to schedule icon extraction for %s", item.path)
 
+    def _schedule_icon_requests(self) -> None:
+        if self._stopping or self._icon_request_after is not None:
+            return
+        try:
+            self._icon_request_after = self.root.after_idle(
+                self._flush_icon_requests
+            )
+        except tk.TclError:
+            self._icon_request_after = None
+
+    def _flush_icon_requests(self) -> None:
+        self._icon_request_after = None
+        if not self._stopping:
+            self._request_all_icons()
+
     def _publish_validation_result(self, result: ValidationResult) -> None:
         self._safe_publish(ValidationResultCommand(result=result))
 
@@ -802,15 +1334,47 @@ class QuickAccessApp:
         self.statuses[result.item_id] = result.status
         self._refresh_visible_popup()
 
-    def _refresh_visible_popup(self) -> None:
+    def _refresh_visible_popup(self, *, layout_required: bool = False) -> None:
+        self._popup_refresh_requires_layout = (
+            self._popup_refresh_requires_layout or layout_required
+        )
         if self._popup_refresh_after is not None:
             return
         self._popup_refresh_after = self.root.after_idle(self._flush_popup_refresh)
 
     def _flush_popup_refresh(self) -> None:
         self._popup_refresh_after = None
+        layout_required = self._popup_refresh_requires_layout
+        self._popup_refresh_requires_layout = False
         if self._stopping:
             return
+
+        popups = list(self._popup_pool.values())
+        if self.popup is not None and all(
+            popup is not self.popup for popup in popups
+        ):
+            popups.append(self.popup)
+        if not layout_required and popups:
+            applied_to_any_popup = False
+            runtime_state_applied = True
+            for popup in popups:
+                try:
+                    if not popup.winfo_exists():
+                        continue
+                    applied_to_any_popup = True
+                    runtime_state_applied = popup.apply_runtime_state(
+                        self.config,
+                        self.statuses,
+                        self.icon_images,
+                    ) and runtime_state_applied
+                except tk.TclError:
+                    continue
+                except Exception:
+                    runtime_state_applied = False
+                    LOGGER.exception("Unable to apply popup runtime state")
+            if applied_to_any_popup and runtime_state_applied:
+                return
+
         if (
             self.popup is not None
             and self.popup.visible
@@ -823,9 +1387,42 @@ class QuickAccessApp:
                 self._last_anchor,
                 self._last_work_area,
                 icons=self.icon_images,
+                target_dpi_scale=(
+                    self._last_monitor_context.scale
+                    if getattr(self, "_last_monitor_context", None) is not None
+                    else None
+                ),
             )
+            self._prepare_inactive_popups(self.popup)
             return
         self._prewarm_popup()
+
+    def _prepare_inactive_popups(self, active_popup: PopupPanel) -> None:
+        """Refresh hidden monitor-local trees outside the next hotkey path."""
+
+        for key, popup in tuple(self._popup_pool.items()):
+            if popup is active_popup:
+                continue
+            context = self._popup_contexts.get(key)
+            if context is None:
+                continue
+            try:
+                if not popup.winfo_exists():
+                    continue
+                popup.prepare(
+                    self.config,
+                    self.statuses,
+                    context.work_area,
+                    icons=self.icon_images,
+                    target_dpi_scale=context.scale,
+                )
+            except tk.TclError:
+                continue
+            except Exception:
+                LOGGER.exception(
+                    "Unable to refresh hidden popup for %s",
+                    context.identifier,
+                )
 
     def _begin_quick_add(self, explorer_hwnd: int | None) -> None:
         if self._quick_add_inflight:
@@ -886,13 +1483,29 @@ class QuickAccessApp:
             return
         self._cancel_quick_add_timeout()
         try:
-            if not isinstance(result, ExplorerTargetResult) or not result.success or not result.path:
+            if (
+                not isinstance(result, ExplorerTargetResult)
+                or not result.success
+                or not result.path
+            ):
                 message = (
                     result.error
                     if isinstance(result, ExplorerTargetResult) and result.error
                     else "현재 열린 탐색기 창이 없습니다"
                 )
                 self.toast.show(message, kind="warning")
+                return
+            targets = result.targets or (
+                ExplorerTarget(
+                    path=result.path,
+                    suggested_name=(
+                        result.suggested_name or nt_basename(result.path)
+                    ),
+                    item_type=result.item_type or "file",
+                ),
+            )
+            if len(targets) > 1:
+                self._add_quick_add_targets(targets)
                 return
             name = ask_display_name(
                 self._dialog_parent(),
@@ -910,6 +1523,72 @@ class QuickAccessApp:
         finally:
             self._quick_add_inflight = False
             self._quick_add_generation += 1
+
+    def _add_quick_add_targets(
+        self,
+        targets: tuple[ExplorerTarget, ...],
+    ) -> bool:
+        """Add a multi-selection with one durable save and one layout refresh."""
+
+        existing = {
+            self._local_target_identity(item.path)
+            for item in self.config.items
+            if item.type != "url"
+        }
+        accepted: list[ExplorerTarget] = []
+        skipped = 0
+        for target in targets:
+            identity = self._local_target_identity(target.path)
+            if identity in existing:
+                skipped += 1
+                continue
+            existing.add(identity)
+            accepted.append(target)
+
+        if not accepted:
+            self.toast.show(
+                "선택한 항목이 모두 이미 등록되어 있습니다.",
+                kind="warning",
+            )
+            return False
+
+        added_ids: list[str] = []
+
+        def mutate(config: LauncherConfig) -> None:
+            for target in accepted:
+                item = config.add_item(
+                    target.path,
+                    name=target.suggested_name or nt_basename(target.path),
+                    item_type=target.item_type,  # type: ignore[arg-type]
+                )
+                added_ids.append(item.id)
+
+        if not self._commit(mutate, "선택한 항목을 저장하지 못했습니다"):
+            return False
+
+        for item_id in added_ids:
+            item = self.config.get_item(item_id)
+            self.statuses.pop(item.id, None)
+            try:
+                self.validator.validate(item.id, item.path)
+            except Exception:
+                LOGGER.exception("Failed to validate quick-added item %s", item.path)
+            try:
+                self.icons.request(icon_key(item.path, item.type), item.path)
+            except Exception:
+                LOGGER.exception("Failed to request quick-added icon %s", item.path)
+
+        message = f"선택한 항목 {len(accepted)}개를 한 번에 등록했습니다."
+        if skipped:
+            message += f" 이미 등록된 {skipped}개는 건너뛰었습니다."
+        self.toast.show(message, kind="success")
+        if self.settings is not None and self.settings.winfo_viewable():
+            self.settings.refresh()
+        return True
+
+    @staticmethod
+    def _local_target_identity(path: str) -> str:
+        return ntpath.normcase(ntpath.normpath(path.strip()))
 
     def _check_for_update(self) -> None:
         if self._stopping or not self.config.check_updates:
@@ -1001,12 +1680,17 @@ class QuickAccessApp:
             return
         self._stopping = True
         LOGGER.info("QuickAccess shutdown started")
+        self._cancel_monitor_refresh()
         self._cancel_update_check_schedule()
         self._cancel_quick_add_timeout()
         try:
             self.validator.close()
         except Exception:
             LOGGER.exception("Path validator shutdown failed")
+        try:
+            self.icons.close()
+        except Exception:
+            LOGGER.exception("Icon service shutdown failed")
         try:
             self.hotkeys.stop()
         except Exception:
@@ -1048,6 +1732,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="indicates that Windows started the application at logon",
     )
     parser.add_argument(
+        "--settings",
+        action="store_true",
+        help="open settings, or ask the resident instance to open settings",
+    )
+    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -1067,6 +1756,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         require_windows()
         if not guard.acquire():
+            request = (
+                InstanceRequest.OPEN_SETTINGS
+                if args.settings
+                else InstanceRequest.SHOW_PANEL
+            )
+            notified = guard.notify_existing(request)
+            LOGGER.info(
+                "Existing QuickAccess instance detected; activation %s (%s)",
+                request.value,
+                "sent" if notified else "unavailable",
+            )
             return 0
         enable_dpi_awareness()
         if args.smoke_test:
@@ -1097,8 +1797,11 @@ def main(argv: list[str] | None = None) -> int:
             load_result,
             started_at_logon=args.startup,
             smoke_test=args.smoke_test,
+            instance_guard=guard,
         )
         application.start()
+        if args.settings:
+            root.after(0, application.open_settings)
         if args.smoke_test:
             root.after(2500, application.shutdown)
         LOGGER.info("QuickAccess started")

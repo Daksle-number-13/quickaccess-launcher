@@ -19,14 +19,44 @@ import uuid
 ItemType = Literal["folder", "file", "url"]
 AppearanceMode = Literal["system", "light", "dark"]
 
+CURRENT_SCHEMA_VERSION = 2
 DEFAULT_HOTKEY = "ctrl+space"
 DEFAULT_QUICK_ADD_HOTKEY = "ctrl+shift+space"
 DEFAULT_APPEARANCE_MODE: AppearanceMode = "system"
 DEFAULT_COLUMNS = 3
 MIN_COLUMNS = 2
 MAX_COLUMNS = 5
+MAX_LAUNCHER_ITEMS = 200
 _FOLDERID_DOWNLOADS = "374DE290-123F-4565-9164-39C4925E467B"
 _FOLDERID_DOCUMENTS = "FDD39AD0-238F-46AF-ADB4-6C85480369C7"
+
+
+class UnsupportedSchemaVersionError(ValueError):
+    """Raised when configuration was written by a newer QuickAccess version."""
+
+    def __init__(
+        self,
+        schema_version: int,
+        *,
+        current_version: int = CURRENT_SCHEMA_VERSION,
+    ) -> None:
+        self.schema_version = schema_version
+        self.current_version = current_version
+        super().__init__(
+            "Configuration schema version "
+            f"{schema_version} is newer than supported version {current_version}"
+        )
+
+
+class LauncherItemLimitError(ValueError):
+    """Raised before an oversized config can exhaust the resident UI."""
+
+    def __init__(self, count: int, *, limit: int = MAX_LAUNCHER_ITEMS) -> None:
+        self.count = count
+        self.limit = limit
+        super().__init__(
+            f"바로가기는 최대 {limit}개까지 등록할 수 있습니다 (요청: {count}개)"
+        )
 
 
 def _new_id() -> str:
@@ -181,6 +211,19 @@ def _coerce_appearance_mode(value: object) -> AppearanceMode:
     return DEFAULT_APPEARANCE_MODE
 
 
+def _read_schema_version(data: Mapping[str, object]) -> int | None:
+    """Return a validated object-schema version, or ``None`` for legacy data."""
+
+    if "schema_version" not in data:
+        return None
+    value = data["schema_version"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("Configuration 'schema_version' must be a positive integer")
+    if value > CURRENT_SCHEMA_VERSION:
+        raise UnsupportedSchemaVersionError(value)
+    return value
+
+
 @dataclass(slots=True)
 class LauncherItem:
     """A single fixed-position launcher button."""
@@ -307,6 +350,10 @@ class LauncherConfig:
         defaults = cls.default(user_home=user_home)
 
         if isinstance(data, Mapping):
+            # Unversioned objects are the v1 format shipped before explicit
+            # schema numbering.  Explicit v1 objects use the same fields, so
+            # both can be parsed without lossy intermediate transformations.
+            _read_schema_version(data)
             if "items" in data:
                 raw_items = data["items"]
                 if not isinstance(raw_items, Sequence) or isinstance(
@@ -341,6 +388,9 @@ class LauncherConfig:
             last_update_notice = ""
         else:
             raise ValueError("Configuration root must be a JSON object or array")
+
+        if len(raw_items) > MAX_LAUNCHER_ITEMS:
+            raise LauncherItemLimitError(len(raw_items))
 
         parsed_items: list[LauncherItem] = []
         for index, raw_item in enumerate(raw_items):
@@ -406,6 +456,8 @@ class LauncherConfig:
                     continue
 
         indexed_items = list(enumerate(valid_items))
+        if len(indexed_items) > MAX_LAUNCHER_ITEMS:
+            raise LauncherItemLimitError(len(indexed_items))
         indexed_items.sort(key=lambda pair: (pair[1].order, pair[0]))
         self.items = [item for _, item in indexed_items]
 
@@ -419,6 +471,7 @@ class LauncherConfig:
     def to_dict(self) -> dict[str, object]:
         self.normalize()
         return {
+            "schema_version": CURRENT_SCHEMA_VERSION,
             "hotkey": self.hotkey,
             "quick_add_hotkey": self.quick_add_hotkey,
             "appearance_mode": self.appearance_mode,
@@ -445,6 +498,8 @@ class LauncherConfig:
         item_id: str | None = None,
         position: int | None = None,
     ) -> LauncherItem:
+        if len(self.items) >= MAX_LAUNCHER_ITEMS:
+            raise LauncherItemLimitError(len(self.items) + 1)
         path_text = _optional_text(path)
         if not path_text:
             raise ValueError("Launcher item path must not be empty")

@@ -8,6 +8,7 @@ from quickaccess.commands import (
     CommandBus,
     CommandBusClosedError,
     CommandSource,
+    IconReadyCommand,
     OpenPanelCommand,
     OpenSettingsCommand,
     QuitCommand,
@@ -81,6 +82,52 @@ class CommandBusTests(unittest.TestCase):
         commands = bus.drain()
         self.assertEqual(len(commands), publisher_count * commands_per_publisher)
         self.assertEqual(len({command.reason for command in commands}), len(commands))
+
+    def test_ui_drain_prioritizes_hotkey_over_background_backlog(self) -> None:
+        bus = CommandBus()
+        for index in range(1000):
+            bus.publish(IconReadyCommand(key=f"icon-{index}", image=object()))
+        panel = OpenPanelCommand(
+            source=CommandSource.HOTKEY,
+            cursor_position=(120, 240),
+        )
+        bus.publish(panel)
+
+        drained = bus.drain_for_ui(40)
+
+        self.assertIs(panel, drained[0])
+        self.assertEqual(39, len(drained[1:]))
+
+    def test_ui_drain_coalesces_idempotent_commands_to_newest_value(self) -> None:
+        bus = CommandBus()
+        first_panel = OpenPanelCommand(cursor_position=(1, 1))
+        latest_panel = OpenPanelCommand(cursor_position=(9, 9))
+        first_icon = IconReadyCommand(key=".xlsx", image="old")
+        latest_icon = IconReadyCommand(key=".xlsx", image="new")
+        bus.publish_many([first_panel, first_icon, latest_panel, latest_icon])
+
+        drained = bus.drain_for_ui()
+
+        self.assertEqual([latest_panel, latest_icon], drained)
+        self.assertEqual(0, len(bus))
+
+    def test_fifo_contract_survives_a_priority_drain(self) -> None:
+        bus = CommandBus()
+        background = IconReadyCommand(key=".pdf", image="ready")
+        panel = OpenPanelCommand(source=CommandSource.HOTKEY)
+        settings = OpenSettingsCommand(source=CommandSource.TRAY)
+        bus.publish_many([background, panel, settings])
+
+        self.assertEqual([panel], bus.drain_for_ui(1))
+        self.assertEqual([background, settings], bus.drain())
+
+    def test_plain_fifo_drain_does_not_coalesce_duplicates(self) -> None:
+        bus = CommandBus()
+        first = OpenPanelCommand(cursor_position=(1, 1))
+        second = OpenPanelCommand(cursor_position=(2, 2))
+        bus.publish_many([first, second])
+
+        self.assertEqual([first, second], bus.drain())
 
 
 if __name__ == "__main__":

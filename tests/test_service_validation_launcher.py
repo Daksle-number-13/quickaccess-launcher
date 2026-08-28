@@ -36,6 +36,10 @@ class PathValidationTests(unittest.TestCase):
         self.assertEqual(statuses["one"], PathStatus.VALID)
         self.assertEqual(statuses["two"], PathStatus.MISSING)
         self.assertEqual(statuses["three"], PathStatus.ERROR)
+        broken = {result.item_id: result.is_broken for result in results}
+        self.assertFalse(broken["one"])
+        self.assertTrue(broken["two"])
+        self.assertTrue(broken["three"])
 
     def test_timeout_emits_once_and_late_worker_is_ignored(self) -> None:
         release = threading.Event()
@@ -55,6 +59,7 @@ class PathValidationTests(unittest.TestCase):
             validator.validate("slow", r"\\server\offline")
             self.assertTrue(ready.wait(1))
             self.assertEqual(received[0].status, PathStatus.TIMEOUT)
+            self.assertFalse(received[0].is_broken)
             release.set()
             time.sleep(0.08)
             self.assertEqual(len(received), 1)

@@ -3,7 +3,7 @@
 from .models import AppearanceMode, ItemType, LauncherConfig, LauncherItem, normalize_web_url
 from .storage import ConfigStore, LoadResult
 
-__version__ = "1.2.4"
+__version__ = "2.0.0"
 __author__ = "Daksle"
 
 __all__ = [

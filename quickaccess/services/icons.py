@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import math
 import ntpath
 import os
 import queue
 import threading
+import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -207,6 +210,32 @@ def icon_key(path: str, item_type: str) -> str:
     return extension or "\0file"
 
 
+IconReadyCallback = Callable[[str, IconImage], object]
+
+
+@dataclass(slots=True)
+class _IconCandidate:
+    path: str
+    identity: str
+    attempt: int = 0
+
+
+@dataclass(slots=True)
+class _KeyRequestState:
+    ready: deque[_IconCandidate] = field(default_factory=deque)
+    known_paths: set[str] = field(default_factory=set)
+    callbacks: list[IconReadyCallback] = field(default_factory=list)
+    active: _IconCandidate | None = None
+    retry_timers: set[threading.Timer] = field(default_factory=set)
+
+
+@dataclass(frozen=True, slots=True)
+class _IconWork:
+    key: str
+    state: _KeyRequestState
+    candidate: _IconCandidate
+
+
 class IconService:
     """Cache Windows shell icons and extract missing ones off the Tk thread."""
 
@@ -218,19 +247,30 @@ class IconService:
         on_callback_error: Callable[[Exception], object] | None = None,
         api: _IconApi | None | object = "auto",
         max_workers: int = 4,
+        retry_delays: tuple[float, ...] = (0.5, 2.0),
     ) -> None:
         if max_workers <= 0:
             raise ValueError("max_workers must be greater than zero")
+        normalized_retry_delays = tuple(float(delay) for delay in retry_delays)
+        if any(
+            not math.isfinite(delay) or delay < 0
+            for delay in normalized_retry_delays
+        ):
+            raise ValueError("retry delays must be finite non-negative values")
         self._default_callback = on_ready
         self._size = size
         self._on_callback_error = on_callback_error
-        self._lock = threading.Lock()
-        self._cache: dict[str, IconImage | None] = {}
+        self._retry_delays = normalized_retry_delays
+        self._lock = threading.RLock()
+        self._callbacks_idle = threading.Condition(self._lock)
+        self._cache: dict[str, IconImage] = {}
         self._pending: set[str] = set()
+        self._states: dict[str, _KeyRequestState] = {}
+        self._closed = False
+        self._callbacks_inflight = 0
+        self._callback_threads: dict[int, int] = {}
         self._api = _load_native_api() if api == "auto" else api
-        self._work_queue: queue.Queue[
-            tuple[str, str, Callable[[str, IconImage], object] | None] | None
-        ] = queue.Queue()
+        self._work_queue: queue.Queue[_IconWork | None] = queue.Queue()
         self._workers: list[threading.Thread] = []
         if self._api is not None:
             for index in range(max_workers):
@@ -244,7 +284,8 @@ class IconService:
 
     @property
     def available(self) -> bool:
-        return self._api is not None
+        with self._lock:
+            return self._api is not None and not self._closed
 
     def get_cached(self, key: str) -> IconImage | None:
         with self._lock:
@@ -254,37 +295,267 @@ class IconService:
         self,
         key: str,
         path: str,
-        callback: Callable[[str, IconImage], object] | None = None,
+        callback: IconReadyCallback | None = None,
     ) -> None:
-        if not self.available or not path:
+        if self._api is None or not path:
             return
-        with self._lock:
-            if key in self._cache or key in self._pending:
-                return
-            self._pending.add(key)
         resolved_callback = callback or self._default_callback
-
-        self._work_queue.put((key, path, resolved_callback))
+        candidate_identity = ntpath.normcase(ntpath.normpath(path.strip()))
+        with self._lock:
+            if self._closed or key in self._cache:
+                return
+            state = self._states.get(key)
+            if state is None:
+                state = _KeyRequestState()
+                self._states[key] = state
+                self._pending.add(key)
+            self._remember_callback_locked(state, resolved_callback)
+            if candidate_identity not in state.known_paths:
+                state.known_paths.add(candidate_identity)
+                state.ready.append(_IconCandidate(path, candidate_identity))
+            self._enqueue_next_locked(key, state)
 
     def _worker_loop(self) -> None:
         while True:
-            request = self._work_queue.get()
-            if request is None:
+            work = self._work_queue.get()
+            if work is None:
                 return
-            key, path, resolved_callback = request
-            image = self._extract(path)
             with self._lock:
-                self._cache[key] = image
-                self._pending.discard(key)
-            if image is not None and resolved_callback is not None:
+                state = self._states.get(work.key)
+                if (
+                    self._closed
+                    or state is not work.state
+                    or state.active is not work.candidate
+                ):
+                    continue
+
+            image = self._extract(work.candidate.path)
+            callbacks: tuple[IconReadyCallback, ...] = ()
+            timers_to_cancel: tuple[threading.Timer, ...] = ()
+            with self._lock:
+                state = self._states.get(work.key)
+                if (
+                    self._closed
+                    or state is not work.state
+                    or state.active is not work.candidate
+                ):
+                    continue
+                state.active = None
+                if image is not None:
+                    # Only successful extractions enter the cache.  A failed
+                    # shell lookup remains retryable on this or a later panel
+                    # open, and cannot poison a shared extension key.
+                    self._cache[work.key] = image
+                    callbacks = tuple(state.callbacks)
+                    timers_to_cancel = tuple(state.retry_timers)
+                    self._drop_state_locked(work.key, state)
+                else:
+                    candidate = work.candidate
+                    if candidate.attempt < len(self._retry_delays):
+                        self._schedule_retry_locked(work.key, state, candidate)
+                    else:
+                        state.known_paths.discard(candidate.identity)
+                    # Prefer a different queued source immediately.  A bad
+                    # folder or extension representative must never make a
+                    # valid same-key candidate wait for its retry backoff.
+                    self._enqueue_next_locked(work.key, state)
+                    self._drop_state_if_idle_locked(work.key, state)
+
+            for timer in timers_to_cancel:
+                timer.cancel()
+            if image is not None:
+                self._deliver_callbacks(callbacks, work.key, image)
+
+    def _remember_callback_locked(
+        self,
+        state: _KeyRequestState,
+        callback: IconReadyCallback | None,
+    ) -> None:
+        if callback is not None and all(
+            existing is not callback for existing in state.callbacks
+        ):
+            state.callbacks.append(callback)
+
+    def _enqueue_next_locked(self, key: str, state: _KeyRequestState) -> None:
+        if (
+            self._closed
+            or self._states.get(key) is not state
+            or state.active is not None
+            or not state.ready
+        ):
+            return
+        candidate = state.ready.popleft()
+        state.active = candidate
+        self._work_queue.put(_IconWork(key, state, candidate))
+
+    def _schedule_retry_locked(
+        self,
+        key: str,
+        state: _KeyRequestState,
+        candidate: _IconCandidate,
+    ) -> None:
+        retry_candidate = _IconCandidate(
+            candidate.path,
+            candidate.identity,
+            candidate.attempt + 1,
+        )
+        delay = self._retry_delays[candidate.attempt]
+        timer: threading.Timer
+
+        def make_ready() -> None:
+            with self._lock:
+                state.retry_timers.discard(timer)
+                if self._closed or self._states.get(key) is not state:
+                    return
+                state.ready.append(retry_candidate)
+                self._enqueue_next_locked(key, state)
+
+        timer = threading.Timer(delay, make_ready)
+        timer.name = f"QuickAccessIconRetry-{candidate.attempt + 1}"
+        timer.daemon = True
+        state.retry_timers.add(timer)
+        timer.start()
+
+    def _drop_state_if_idle_locked(
+        self,
+        key: str,
+        state: _KeyRequestState,
+    ) -> None:
+        if state.active is None and not state.ready and not state.retry_timers:
+            self._drop_state_locked(key, state)
+
+    def _drop_state_locked(self, key: str, state: _KeyRequestState) -> None:
+        if self._states.get(key) is state:
+            self._states.pop(key, None)
+            self._pending.discard(key)
+        state.ready.clear()
+        state.known_paths.clear()
+        state.callbacks.clear()
+        state.active = None
+        state.retry_timers.clear()
+
+    def _deliver_callbacks(
+        self,
+        callbacks: tuple[IconReadyCallback, ...],
+        key: str,
+        image: IconImage,
+    ) -> None:
+        for callback in callbacks:
+            if not self._begin_callback():
+                return
+            error: Exception | None = None
+            try:
+                callback(key, image)
+            except Exception as caught:
+                error = caught
+            finally:
+                self._end_callback()
+            if error is not None:
+                self._deliver_callback_error(error)
+
+    def _deliver_callback_error(self, error: Exception) -> None:
+        callback = self._on_callback_error
+        if callback is None or not self._begin_callback():
+            return
+        try:
+            callback(error)
+        except Exception:
+            pass
+        finally:
+            self._end_callback()
+
+    def _begin_callback(self) -> bool:
+        ident = threading.get_ident()
+        with self._callbacks_idle:
+            if self._closed:
+                return False
+            self._callbacks_inflight += 1
+            self._callback_threads[ident] = self._callback_threads.get(ident, 0) + 1
+            return True
+
+    def _end_callback(self) -> None:
+        ident = threading.get_ident()
+        with self._callbacks_idle:
+            self._callbacks_inflight -= 1
+            remaining = self._callback_threads.get(ident, 0) - 1
+            if remaining > 0:
+                self._callback_threads[ident] = remaining
+            else:
+                self._callback_threads.pop(ident, None)
+            self._callbacks_idle.notify_all()
+
+    def close(self, timeout: float | None = 1.0) -> bool:
+        """Stop retries and workers; return whether every worker has exited.
+
+        An extraction already inside a native API cannot be forcibly aborted.
+        It is ignored when it returns, so callbacks cannot begin after close.
+        The timeout keeps application shutdown bounded in that exceptional
+        case.  Calling close repeatedly is safe.
+        """
+        if timeout is not None and (not math.isfinite(timeout) or timeout < 0):
+            raise ValueError("timeout must be a finite non-negative value or None")
+        deadline = None if timeout is None else time.monotonic() + timeout
+        current_thread = threading.current_thread()
+        timers: tuple[threading.Timer, ...] = ()
+        first_close = False
+
+        with self._callbacks_idle:
+            if not self._closed:
+                first_close = True
+                self._closed = True
+                timers = tuple(
+                    timer
+                    for state in self._states.values()
+                    for timer in state.retry_timers
+                )
+                for key, state in tuple(self._states.items()):
+                    self._drop_state_locked(key, state)
+
+        if first_close:
+            for timer in timers:
+                timer.cancel()
+            while True:
                 try:
-                    resolved_callback(key, image)
-                except Exception as error:
-                    if self._on_callback_error is not None:
-                        try:
-                            self._on_callback_error(error)
-                        except Exception:
-                            pass
+                    self._work_queue.get_nowait()
+                except queue.Empty:
+                    break
+            for _worker in self._workers:
+                self._work_queue.put(None)
+
+        for worker in self._workers:
+            if worker is current_thread:
+                continue
+            remaining = self._remaining_timeout(deadline)
+            if remaining == 0:
+                break
+            worker.join(remaining)
+
+        current_ident = threading.get_ident()
+        with self._callbacks_idle:
+            while self._callbacks_inflight > self._callback_threads.get(
+                current_ident, 0
+            ):
+                remaining = self._remaining_timeout(deadline)
+                if remaining == 0:
+                    break
+                self._callbacks_idle.wait(remaining)
+
+        return all(
+            worker is current_thread or not worker.is_alive()
+            for worker in self._workers
+        )
+
+    @staticmethod
+    def _remaining_timeout(deadline: float | None) -> float | None:
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    def __enter__(self) -> IconService:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def _extract(self, path: str) -> IconImage | None:
         try:

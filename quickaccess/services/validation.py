@@ -29,7 +29,10 @@ class ValidationResult:
 
     @property
     def is_broken(self) -> bool:
-        return self.status is not PathStatus.VALID
+        # A deadline only means Windows did not answer quickly enough.  The
+        # target may still be launchable (notably sleeping network/OneDrive
+        # paths), so TIMEOUT is a warning rather than a broken shortcut.
+        return self.status in {PathStatus.MISSING, PathStatus.ERROR}
 
 
 @dataclass(slots=True)

@@ -186,6 +186,15 @@ class CommandBusClosedError(RuntimeError):
     """Raised when a caller publishes to, or waits on, a closed bus."""
 
 
+@dataclass(slots=True)
+class _QueuedCommand:
+    sequence: int
+    command: AppCommand
+    priority: int
+    coalescing_key: tuple[object, ...] | None
+    consumed: bool = False
+
+
 class CommandBus:
     """A small FIFO command channel safe for multiple publisher threads.
 
@@ -195,7 +204,13 @@ class CommandBus:
     """
 
     def __init__(self) -> None:
-        self._commands: deque[AppCommand] = deque()
+        self._fifo: deque[_QueuedCommand] = deque()
+        self._priority_queues: tuple[deque[_QueuedCommand], ...] = tuple(
+            deque() for _ in range(5)
+        )
+        self._latest_by_key: dict[tuple[object, ...], _QueuedCommand] = {}
+        self._next_sequence = 0
+        self._size = 0
         self._closed = False
         self._condition = threading.Condition()
 
@@ -210,7 +225,7 @@ class CommandBus:
         with self._condition:
             if self._closed:
                 raise CommandBusClosedError("command bus is closed")
-            self._commands.append(command)
+            self._append_locked(command)
             self._condition.notify()
 
     def publish_many(self, commands: tuple[AppCommand, ...] | list[AppCommand]) -> None:
@@ -221,7 +236,8 @@ class CommandBus:
         with self._condition:
             if self._closed:
                 raise CommandBusClosedError("command bus is closed")
-            self._commands.extend(commands)
+            for command in commands:
+                self._append_locked(command)
             self._condition.notify_all()
 
     def get(self, *, block: bool = True, timeout: float | None = None) -> AppCommand:
@@ -241,7 +257,7 @@ class CommandBus:
                 return self._pop_or_raise()
 
             deadline = None if timeout is None else time.monotonic() + timeout
-            while not self._commands and not self._closed:
+            while self._size == 0 and not self._closed:
                 if deadline is None:
                     self._condition.wait()
                     continue
@@ -264,31 +280,145 @@ class CommandBus:
             return []
 
         with self._condition:
-            count = len(self._commands) if max_items is None else min(
-                len(self._commands), max_items
-            )
-            return [self._commands.popleft() for _ in range(count)]
+            count = self._size if max_items is None else min(self._size, max_items)
+            drained: list[AppCommand] = []
+            while len(drained) < count:
+                envelope = self._pop_fifo_envelope_locked()
+                if envelope is None:
+                    break
+                self._consume_locked(envelope)
+                drained.append(envelope.command)
+            return drained
+
+    def drain_for_ui(self, max_items: int | None = None) -> list[AppCommand]:
+        """Drain commands by interaction priority with safe coalescing.
+
+        The resident UI receives many low-priority validation and icon
+        results.  A hotkey request must never wait behind that backlog.  This
+        method keeps :meth:`drain`'s public FIFO contract intact while giving
+        the application a latency-oriented view that:
+
+        - handles quit and panel requests before background presentation data;
+        - keeps only the newest command for idempotent/coalescible targets;
+        - preserves publication order inside each priority tier.
+        """
+
+        if max_items is not None and max_items < 0:
+            raise ValueError("max_items must be non-negative")
+        if max_items == 0:
+            return []
+
+        with self._condition:
+            if self._size == 0:
+                return []
+
+            count = self._size if max_items is None else min(self._size, max_items)
+            drained: list[AppCommand] = []
+            for priority_queue in self._priority_queues:
+                while priority_queue and len(drained) < count:
+                    envelope = priority_queue.popleft()
+                    if envelope.consumed:
+                        continue
+                    key = envelope.coalescing_key
+                    if key is not None and self._latest_by_key.get(key) is not envelope:
+                        self._consume_locked(envelope)
+                        continue
+                    self._consume_locked(envelope)
+                    drained.append(envelope.command)
+                if len(drained) >= count:
+                    break
+            self._discard_consumed_fifo_head_locked()
+            return drained
 
     def close(self, *, discard_pending: bool = False) -> None:
         """Reject future publishes and wake every blocked consumer."""
 
         with self._condition:
             if discard_pending:
-                self._commands.clear()
+                self._fifo.clear()
+                for priority_queue in self._priority_queues:
+                    priority_queue.clear()
+                self._latest_by_key.clear()
+                self._size = 0
             self._closed = True
             self._condition.notify_all()
 
     def empty(self) -> bool:
         with self._condition:
-            return not self._commands
+            return self._size == 0
 
     def __len__(self) -> int:
         with self._condition:
-            return len(self._commands)
+            return self._size
 
     def _pop_or_raise(self) -> AppCommand:
-        if self._commands:
-            return self._commands.popleft()
+        envelope = self._pop_fifo_envelope_locked()
+        if envelope is not None:
+            self._consume_locked(envelope)
+            return envelope.command
         if self._closed:
             raise CommandBusClosedError("command bus is closed")
         raise queue.Empty
+
+    def _append_locked(self, command: AppCommand) -> None:
+        priority = self._ui_priority(command)
+        key = self._coalescing_key(command)
+        envelope = _QueuedCommand(
+            sequence=self._next_sequence,
+            command=command,
+            priority=priority,
+            coalescing_key=key,
+        )
+        self._next_sequence += 1
+        self._size += 1
+        self._fifo.append(envelope)
+        self._priority_queues[priority].append(envelope)
+        if key is not None:
+            self._latest_by_key[key] = envelope
+
+    def _pop_fifo_envelope_locked(self) -> _QueuedCommand | None:
+        self._discard_consumed_fifo_head_locked()
+        if not self._fifo:
+            return None
+        return self._fifo.popleft()
+
+    def _discard_consumed_fifo_head_locked(self) -> None:
+        while self._fifo and self._fifo[0].consumed:
+            self._fifo.popleft()
+
+    def _consume_locked(self, envelope: _QueuedCommand) -> None:
+        if envelope.consumed:
+            return
+        envelope.consumed = True
+        self._size -= 1
+        key = envelope.coalescing_key
+        if key is not None and self._latest_by_key.get(key) is envelope:
+            self._latest_by_key.pop(key, None)
+
+    @staticmethod
+    def _ui_priority(command: AppCommand) -> int:
+        if isinstance(command, QuitCommand):
+            return 0
+        if isinstance(command, OpenPanelCommand):
+            return 1
+        if isinstance(command, (OpenSettingsCommand, QuickAddCommand)):
+            return 2
+        if isinstance(command, (ValidationResultCommand, IconReadyCommand)):
+            return 4
+        return 3
+
+    @staticmethod
+    def _coalescing_key(command: AppCommand) -> tuple[object, ...] | None:
+        if isinstance(command, OpenPanelCommand):
+            return (CommandType.OPEN_PANEL,)
+        if isinstance(command, OpenSettingsCommand):
+            return (CommandType.OPEN_SETTINGS,)
+        if isinstance(command, UpdateAvailableCommand):
+            return (CommandType.UPDATE_AVAILABLE,)
+        if isinstance(command, IconReadyCommand):
+            return (CommandType.ICON_READY, command.key)
+        if isinstance(command, ValidationResultCommand):
+            item_id = getattr(command.result, "item_id", None)
+            if item_id is not None:
+                return (CommandType.VALIDATION_RESULT, item_id)
+        return None

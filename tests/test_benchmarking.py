@@ -61,6 +61,7 @@ def test_popup_prepare_skips_render_for_an_unchanged_signature() -> None:
             PopupPanel._dynamic_content_signature
         )
         _dynamic_item_state = staticmethod(PopupPanel._dynamic_item_state)
+        _synchronize_dpi_scale = PopupPanel._synchronize_dpi_scale
 
         def __init__(self) -> None:
             self.render_count = 0
@@ -86,6 +87,10 @@ def test_popup_prepare_skips_render_for_an_unchanged_signature() -> None:
 
         @staticmethod
         def update_idletasks() -> None:
+            return None
+
+        @staticmethod
+        def _prime_warm_mapping() -> None:
             return None
 
     config = LauncherConfig(
@@ -124,20 +129,20 @@ def test_baseline_limit_has_percentage_and_absolute_noise_floor() -> None:
     )
 
 
-def test_popup_schema_2_baseline_uses_idle_name_and_excludes_e2e_map() -> None:
-    assert SCHEMA_VERSION == 2
+def test_popup_schema_3_baseline_uses_idle_name_and_excludes_e2e_visibility() -> None:
+    assert SCHEMA_VERSION == 3
     current = {
         "metrics": {
             "popup_warm_show_call_ms": {"p95_ms": 2.0},
             "popup_warm_idle_complete_ms": {"p95_ms": 10.0},
-            "open_panel_command_to_map_ms": {"p95_ms": 10_000.0},
+            "open_panel_command_to_visible_ms": {"p95_ms": 10_000.0},
         }
     }
     baseline = {
         "metrics": {
             "popup_warm_show_call_ms": {"p95_ms": 2.0},
             "popup_warm_idle_complete_ms": {"p95_ms": 2.0},
-            "open_panel_command_to_map_ms": {"p95_ms": 1.0},
+            "open_panel_command_to_visible_ms": {"p95_ms": 1.0},
         }
     }
 
@@ -152,18 +157,18 @@ def test_popup_schema_2_baseline_uses_idle_name_and_excludes_e2e_map() -> None:
     assert failures[0].startswith("popup_warm_idle_complete_ms p95")
 
 
-def test_popup_schema_1_baseline_is_rejected() -> None:
-    schema_1 = json.dumps(
+def test_previous_popup_baseline_schema_is_rejected() -> None:
+    previous_schema = json.dumps(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "benchmark": "quickaccess-popup-warm-path",
         }
     )
     with (
-        patch.object(Path, "read_text", return_value=schema_1),
+        patch.object(Path, "read_text", return_value=previous_schema),
         pytest.raises(ValueError, match="schema version"),
     ):
-        _load_baseline(Path("unused-schema-1.json"), {})
+        _load_baseline(Path("unused-schema-2.json"), {})
 
 
 @pytest.mark.parametrize(

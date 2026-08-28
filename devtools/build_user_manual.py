@@ -273,7 +273,7 @@ def draw_page(canvas, document) -> None:  # type: ignore[no-untyped-def]
         canvas.line(MARGIN_X, 12 * mm, PAGE_WIDTH - MARGIN_X, 12 * mm)
         canvas.setFont("Malgun", 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v1.2.4")
+        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v2.0.0")
         canvas.drawRightString(PAGE_WIDTH - MARGIN_X, 7.5 * mm, str(page))
     canvas.restoreState()
 
@@ -296,7 +296,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 4 * mm),
             note("5분이면 시작할 수 있어요", "설치 없이 실행하고, 원하는 항목을 등록한 뒤 Ctrl + Space만 누르면 됩니다.", tone="green"),
             Spacer(1, 9 * mm),
-            Paragraph("버전 1.2.4  |  Windows 10/11 x64  |  2026-08-24", SMALL),
+            Paragraph("버전 2.0.0  |  Windows 10/11 x64  |  2026-08-28", SMALL),
             PageBreak(),
         ]
     )
@@ -327,7 +327,7 @@ def build_story() -> list[Flowable]:
             screenshot(POPUP_SCREENSHOT, CONTENT_WIDTH, "Ctrl + Space를 눌렀을 때 나타나는 실제 패널"),
             step(1, "항목 열기", "원하는 카드를 클릭하면 파일이나 폴더는 Windows 탐색기/연결 프로그램으로, 웹 링크는 기본 브라우저로 열립니다."),
             Spacer(1, 2.5 * mm),
-            step(2, "키보드로 선택", "방향키로 카드 사이를 이동하고 Enter 또는 Space를 누르면 선택한 항목이 열립니다."),
+            step(2, "검색하고 키보드로 선택", "검색창에 이름, 경로, 웹사이트 주소 또는 한글 초성을 입력하세요. 방향키와 Home, End, Page Up/Down으로 이동하고 Enter 또는 Space를 누르면 열립니다."),
             Spacer(1, 2.5 * mm),
             step(3, "설정 열기", "패널 오른쪽 위의 톱니바퀴 아이콘을 누르면 항목을 추가하거나 순서를 바꿀 수 있습니다."),
             Spacer(1, 4 * mm),
@@ -368,7 +368,7 @@ def build_story() -> list[Flowable]:
     )
 
     # Web links
-    story.extend(page_header("4. 인터넷 링크 등록하기", "v1.2.0 새 기능"))
+    story.extend(page_header("4. 인터넷 링크 등록하기", "웹사이트도 한 번에"))
     story.extend(
         [
             step(1, "웹 링크 버튼 누르기", "환경 설정의 바로가기 화면 오른쪽 위에서 '웹 링크'를 누릅니다."),
@@ -431,20 +431,57 @@ def build_story() -> list[Flowable]:
             Spacer(1, 4 * mm),
             note("단축키가 작동하지 않으면", "다른 프로그램이나 한글 입력기가 같은 키를 사용 중일 수 있습니다. 환경 설정에서 Ctrl + Alt + Space처럼 다른 조합으로 변경하세요. 변경에 실패하면 기존 단축키가 안전하게 유지됩니다.", tone="amber"),
             Spacer(1, 5 * mm),
-            note("탐색기 빠른 등록", "파일 탐색기를 먼저 활성화하세요. 선택한 항목이 있으면 그 항목을, 선택한 항목이 없으면 현재 폴더를 등록합니다. 여러 항목을 한 번에 선택한 경우에는 등록하지 않습니다.", tone="green"),
+            note("탐색기 빠른 등록", "파일 탐색기를 먼저 활성화하세요. 선택 항목이 있으면 최대 50개를 한 번에 등록하고, 선택 항목이 없으면 현재 폴더를 등록합니다. 해석할 수 없는 가상 항목이 섞이면 일부만 저장하지 않고 전체 요청을 취소합니다.", tone="green"),
+            PageBreak(),
+        ]
+    )
+
+    # Backup and app information
+    story.extend(page_header("6. 설정 백업과 앱 상태 확인", "환경 설정 - 앱 정보"))
+    story.extend(
+        [
+            Paragraph("환경 설정은 네 화면으로 나뉩니다", H2),
+            Table(
+                [
+                    [Paragraph("바로가기", STEP_TITLE), Paragraph("항목 추가, 수정, 삭제, 순서 변경", BODY)],
+                    [Paragraph("단축키·시작", STEP_TITLE), Paragraph("두 전역 단축키와 실제 Windows 자동 실행 상태", BODY)],
+                    [Paragraph("화면·패널", STEP_TITLE), Paragraph("밝기 모드, 한 줄의 열 개수, 새 버전 확인", BODY)],
+                    [Paragraph("앱 정보", STEP_TITLE), Paragraph("버전, 제작자, 설정 가져오기·내보내기, 진단 정보", BODY)],
+                ],
+                colWidths=[42 * mm, CONTENT_WIDTH - 42 * mm],
+                style=TableStyle(
+                    [
+                        ("GRID", (0, 0), (-1, -1), 0.5, LINE),
+                        ("BACKGROUND", (0, 0), (0, -1), BLUE_SOFT),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+                    ]
+                ),
+            ),
+            Spacer(1, 5 * mm),
+            step(1, "설정 내보내기", "앱 정보에서 '설정 내보내기'를 누르면 바로가기와 앱 설정을 읽을 수 있는 JSON 백업으로 저장합니다."),
+            Spacer(1, 3 * mm),
+            step(2, "설정 가져오기", "병합 또는 전체 교체를 고른 뒤 추가, 변경, 제외, 제거 개수를 미리 확인합니다. 전체 교체는 한 번 더 확인해야 적용됩니다."),
+            Spacer(1, 3 * mm),
+            step(3, "진단 정보 복사", "문제 문의에 필요한 버전과 앱 상태를 복사합니다. 등록한 이름, 파일 경로, 웹 주소와 Windows 사용자명은 포함하지 않습니다."),
+            Spacer(1, 5 * mm),
+            note("자동 실행 상태가 다르면", "이전 버전 EXE의 경로가 남아 있으면 QuickAccess가 현재 실행 파일 경로로 복구합니다. 회사 정책 등으로 확인할 수 없으면 앱 정보가 아닌 '단축키·시작' 화면에서 실제 상태를 확인하세요.", tone="amber"),
             PageBreak(),
         ]
     )
 
     # Troubleshooting
-    story.extend(page_header("6. 종료와 문제 해결", "알아두면 편리합니다"))
+    story.extend(page_header("7. 종료와 문제 해결", "알아두면 편리합니다"))
     rows = [
         ("앱을 완전히 종료하려면", "화면 오른쪽 아래 시스템 트레이에서 QuickAccess 아이콘을 우클릭하고 '종료'를 선택합니다."),
         ("설정 창의 X를 눌렀는데 계속 실행돼요", "정상 동작입니다. QuickAccess는 트레이에 상주해야 단축키를 받을 수 있습니다."),
-        ("패널이 두 번 뜨지 않아요", "QuickAccess는 중복 실행을 막습니다. 이미 실행 중이면 새 프로세스는 조용히 종료됩니다."),
+        ("앱을 다시 실행했는데 창만 떠요", "정상 동작입니다. 이미 상주 중이면 새 프로세스를 남기지 않고 기존 앱에 패널 표시 요청을 전달합니다."),
         ("파일 카드가 빨갛게 보여요", "파일이 이동 또는 삭제되었거나 네트워크 드라이브가 연결되지 않은 상태입니다. 카드를 눌러 새 경로를 지정하세요."),
         ("웹 링크가 열리지 않아요", "인터넷 연결과 Windows 기본 브라우저 설정을 확인한 뒤 설정에서 주소를 다시 확인하세요."),
-        ("설정을 되돌리고 싶어요", "%APPDATA%\\QuickAccess\\items.bak.json에 직전 설정 백업이 한 개 보관됩니다."),
+        ("설정을 옮기거나 되돌리고 싶어요", "앱 정보의 설정 내보내기·가져오기를 사용하세요. 앱은 %APPDATA%\\QuickAccess에도 직전 설정과 제한된 손상 복구본을 보관합니다."),
         ("로그가 필요해요", "%LOCALAPPDATA%\\QuickAccess\\logs\\quickaccess.log에서 오류 기록을 확인할 수 있습니다."),
     ]
     troubleshooting = Table(
@@ -495,7 +532,7 @@ def build() -> None:
         bottomMargin=MARGIN_BOTTOM,
         title="QuickAccess 쉬운 사용 설명서",
         author="Daksle",
-        subject="QuickAccess v1.2.4 Korean user manual",
+        subject="QuickAccess v2.0.0 Korean user manual",
         creator="QuickAccess project",
     )
     document.addPageTemplates(PageTemplate(id="manual", frames=[frame], onPage=draw_page))

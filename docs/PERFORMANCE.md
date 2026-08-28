@@ -4,9 +4,11 @@
 
 1. **팝업 warm path**: 상주 프로세스가 팝업 내용을 미리 준비한 뒤, 같은 내용을
    다시 표시하는 동기 호출 시간
-2. **명령→Map 경로**: `OpenPanelCommand` 발행부터 16ms 명령 pump와 실제 앱
-   dispatch를 거쳐 Tk가 팝업의 `<Map>` 이벤트를 전달할 때까지의 시간
-3. **one-file 시작**: `QuickAccess.exe` 실행부터 PyInstaller 압축 해제, Python
+2. **명령→실제 노출 경로**: `OpenPanelCommand` 발행부터 8ms 명령 pump와 실제 앱
+   dispatch를 거쳐 준비된 팝업이 DWM cloak에서 해제될 때까지의 시간
+3. **혼합 DPI 전환**: 서로 다른 Windows 배율의 실제 모니터별 사전 준비 팝업을
+   교대로 표시할 때의 호출·실제 노출·안정화 시간
+4. **one-file 시작**: `QuickAccess.exe` 실행부터 PyInstaller 압축 해제, Python
    import, Tk 생성, 핫키·트레이 준비 완료 로그까지의 시간
 
 각 측정은 원인이 다릅니다. 팝업은 이미 실행 중인 프로세스의 반응성이고,
@@ -15,7 +17,7 @@ one-file 시작은 EXE 압축 해제와 백신 검사 영향을 크게 받습니
 ## 팝업 warm path
 
 표준 조건은 밝게 모드, 항목 20개, 3열, 작업 영역 1920×1040, 워밍업 5회와
-측정 30회입니다. 명령→Map 관찰값은 별도 워밍업 2회와 측정 10회를 사용합니다.
+측정 30회입니다. 명령→노출 관찰값은 별도 워밍업 2회와 측정 10회를 사용합니다.
 
 ```powershell
 python devtools\benchmark_ui.py `
@@ -27,8 +29,8 @@ python devtools\benchmark_ui.py `
 
 - `popup_warm_show_call_ms`: `show()` 호출이 Tk 스레드를 점유하는 시간
 - `popup_warm_idle_complete_ms`: `show()`부터 `update_idletasks()` 반환까지의 시간
-- `open_panel_command_to_map_ms`: 명령 발행부터 의도적으로 한 주기(16ms)를 기다린
-  command pump, 앱 dispatch와 Tk `<Map>` 이벤트까지의 대화형 관찰값
+- `open_panel_command_to_visible_ms`: 명령 발행부터 의도적으로 한 주기(8ms)를 기다린
+  command pump, 앱 dispatch와 실제 창 노출 신호까지의 대화형 관찰값
 - `warm_render_tree_rebuilds`: 동일 내용에서 위젯 트리를 다시 만들었는지 여부
 
 동일 내용에서 렌더 트리가 한 번이라도 바뀌면 측정은 즉시 실패합니다. 시간 기준은
@@ -37,11 +39,12 @@ python devtools\benchmark_ui.py `
 픽셀을 표시했거나 포커스를 옮겼다는 뜻이 아닙니다. 같은 PC의 이전 JSON과 비교할
 때만 선택 예산 `--max-idle-p95-ms`를 적용하세요.
 
-`open_panel_command_to_map_ms`는 실제 `CommandBus`, `OpenPanelCommand`, 16ms pump와
-`QuickAccessApp`의 dispatch/open 경로를 사용합니다. `<Map>`은 Tk가 창을 mapped
-상태로 전환했다는 이벤트일 뿐 첫 픽셀 표시나 키보드 포커스 완료를 보장하지
-않습니다. 데스크톱 포커스 정책과 원격 세션 상태에 영향을 받으므로 JSON에 기록하는
-관찰 지표이며, 공유 CI 또는 기본 baseline 실패 조건에는 사용하지 않습니다.
+`open_panel_command_to_visible_ms`는 실제 `CommandBus`, `OpenPanelCommand`, 8ms pump와
+`QuickAccessApp`의 dispatch/open 경로를 사용합니다. Windows에서는 미리 mapped된
+창의 DWM cloak 해제가 성공한 시점, 미지원 환경에서는 일반적인 `deiconify()` 직후를
+측정합니다. 첫 픽셀의 실제 합성 완료나 키보드 포커스 완료까지 보장하는 값은 아니며,
+데스크톱 포커스 정책과 원격 세션 상태에 영향을 받으므로 JSON에 기록하는 관찰
+지표입니다. 공유 CI 또는 기본 baseline 실패 조건에는 사용하지 않습니다.
 
 ```powershell
 python devtools\benchmark_ui.py `
@@ -54,6 +57,35 @@ baseline 비교는 같은 호스트·Python·화면 조건만 허용하며 warm 
 지표만 비교합니다. 기본 허용치는 이전 p95 대비 25% 또는 2ms 중 큰 여유입니다.
 단 한 번의 수치는 기준으로 사용하지 않습니다. 스키마 2 이전 JSON은 지표 의미가
 달라 baseline으로 사용할 수 없습니다.
+
+## 실제 혼합 DPI 모니터 전환
+
+100%·150%·200%처럼 Windows 배율이 서로 다른 모니터가 연결된 릴리스 PC에서는
+전용 측정을 추가로 실행합니다.
+
+```powershell
+python devtools\benchmark_mixed_dpi.py `
+  --json artifacts\mixed-dpi-popup.json
+```
+
+이 측정은 활성 모니터를 열거한 뒤 모니터마다 숨겨진 팝업을 하나씩 먼저 준비하고,
+배율 차이가 가장 크게 나도록 순서를 바꾸어 가며 직접 표시 경로와 실제
+`OpenPanelCommand` 경로를 모두 실행합니다. 결과에는 모니터 식별자·작업 영역·배율과
+다음 검증이 함께 기록됩니다.
+
+- 한 번의 열기 요청당 `show()`가 정확히 한 번만 실행됨
+- 기존의 80ms 지연 DPI 재확인이 예약되지 않음
+- 모니터를 바꿔도 렌더 트리와 팝업 셸이 재생성되지 않음
+- 직접 표시→노출과 명령→노출/안정화 시간
+
+서로 다른 배율이 감지되지 않으면 기본적으로 실패합니다. 단일 모니터 개발 PC에서
+의도적으로 건너뛸 때만 `--allow-single-scale-skip`을 사용합니다.
+
+v2.0.0 릴리스 후보는 2026-08-28에 실제 100%·200%·100% 3모니터 환경에서
+20항목·3열, 모니터당 12회(총 36회)로 측정했습니다. p95는 직접 `show()` 호출
+4.5ms, 창 노출 4.7ms, 명령→창 노출 16.2ms, 명령→안정화 20.4ms였고,
+84회의 전체 열기에서 렌더 트리 재생성과 80ms 지연 재표시는 모두 0회였습니다.
+이 값은 같은 PC에서 회귀를 비교하기 위한 참고치이며 다른 PC의 보장값은 아닙니다.
 
 ## PyInstaller one-file 시작
 
@@ -87,7 +119,7 @@ Defender/회사 EDR 상태를 재현할 수 없기 때문입니다. 나머지 �
 합니다.
 
 `resident_ready_ms`에는 팝업 사전 준비까지 포함되지만, 실제 픽셀 표시나 포커스
-완료 시점은 포함되지 않습니다. 따라서 one-file, warm-path와 명령→Map 결과를 함께
+완료 시점은 포함되지 않습니다. 따라서 one-file, warm-path와 명령→노출 결과를 함께
 보며, 고객 관점의 실행→첫 패널 표시 시간은 깨끗한 PC 수동 시험으로 보완합니다.
 
 릴리스 smoke 종료까지 강제 검증하려면 `--require-clean-exit`를 추가합니다. 이는

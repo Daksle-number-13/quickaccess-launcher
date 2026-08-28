@@ -88,10 +88,14 @@ class SettingsActions:
     set_update_checks: Callable[[bool], bool]
     set_hotkeys: Callable[[str, str], bool]
     edit_item: Callable[..., bool] = lambda *_args, **_kwargs: False
+    get_startup_status: Callable[[], object] | None = None
+    import_config: Callable[[], bool] | None = None
+    export_config: Callable[[], bool] | None = None
+    copy_diagnostics: Callable[[], bool] | None = None
 
 
 class SettingsWindow(ctk.CTkToplevel):
-    """A singleton settings window with a compact two-page layout."""
+    """A singleton, keyboard-friendly settings window with four sections."""
 
     def __init__(self, root: tk.Misc, actions: SettingsActions) -> None:
         super().__init__(root)
@@ -106,14 +110,16 @@ class SettingsWindow(ctk.CTkToplevel):
         self._hotkeys_dirty = False
         self._item_action_buttons: list[ctk.CTkButton] = []
         self._items_signature: tuple[object, ...] | None = None
+        self._resize_after_id: str | None = None
+        self._pages: dict[str, ctk.CTkFrame] = {}
+        self._page_headers: dict[str, ctk.CTkFrame] = {}
+        self._page_subtitles: dict[str, ctk.CTkLabel] = {}
+        self._page_scrolls: dict[str, ctk.CTkScrollableFrame] = {}
 
         self.title("QuickAccess")
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.minsize(320, 200)
-        # The app computes a monitor-aware size for every open.  Keeping the
-        # settings shell fixed avoids CTk's DPI-scaled children drifting out
-        # of their responsive breakpoint during a manual native resize.
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.configure(fg_color=BG)
         self.protocol("WM_DELETE_WINDOW", self.withdraw)
         self.grid_columnconfigure(0, minsize=SIDEBAR_WIDTH)
@@ -123,7 +129,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self._monitor = NativeMonitorService()
         self._build_sidebar()
         self._build_items_page()
-        self._build_preferences_page()
+        self._build_shortcuts_page()
+        self._build_appearance_page()
+        self._build_about_page()
         self._select_page("items")
         # CustomTkinter's global wheel handler can miss nested widgets and the
         # scrollbar itself on Windows.  Route wheel input at the toplevel so
@@ -135,6 +143,20 @@ class SettingsWindow(ctk.CTkToplevel):
             lambda event: self._cycle_keyboard_focus(event, reverse=True),
             add="+",
         )
+        self.bind("<Escape>", lambda _event: self.withdraw(), add="+")
+        self.bind("<Control-Key-1>", lambda _event: self._select_page("items"), add="+")
+        self.bind(
+            "<Control-Key-2>",
+            lambda _event: self._select_page("shortcuts"),
+            add="+",
+        )
+        self.bind(
+            "<Control-Key-3>",
+            lambda _event: self._select_page("appearance"),
+            add="+",
+        )
+        self.bind("<Control-Key-4>", lambda _event: self._select_page("about"), add="+")
+        self.bind("<Configure>", self._queue_responsive_layout, add="+")
         self.refresh()
 
     @staticmethod
@@ -204,6 +226,29 @@ class SettingsWindow(ctk.CTkToplevel):
         for button in segmented._buttons_dict.values():
             self._enable_keyboard_button(button)
 
+    def _enable_keyboard_entry(self, entry: ctk.CTkEntry) -> None:
+        """Give text fields the same visible focus treatment as buttons."""
+
+        target = getattr(entry, "_entry", None)
+        if not isinstance(target, tk.Misc):
+            return
+        target.configure(takefocus=True)
+        resting_border_width = int(entry.cget("border_width"))
+        resting_border_color = entry.cget("border_color")
+        target.bind(
+            "<FocusIn>",
+            lambda _event: entry.configure(border_width=2, border_color=ACCENT),
+            add="+",
+        )
+        target.bind(
+            "<FocusOut>",
+            lambda _event: entry.configure(
+                border_width=resting_border_width,
+                border_color=resting_border_color,
+            ),
+            add="+",
+        )
+
     def _keyboard_targets(self) -> list[tk.Misc]:
         widgets: list[ctk.CTkBaseClass] = list(self._nav_buttons.values())
         if self._active_page == "items":
@@ -215,9 +260,18 @@ class SettingsWindow(ctk.CTkToplevel):
                 )
             )
             widgets.extend(self._item_action_buttons)
-        else:
+        elif self._active_page == "appearance":
             widgets.extend(self._appearance._buttons_dict.values())
             widgets.extend(self._columns._buttons_dict.values())
+        elif self._active_page == "about":
+            widgets.extend(
+                (
+                    self._updates,
+                    self._import_button,
+                    self._export_button,
+                    self._diagnostics_button,
+                )
+            )
 
         targets = [
             target
@@ -225,7 +279,7 @@ class SettingsWindow(ctk.CTkToplevel):
             if (target := self._focus_target(widget)) is not None
             and str(widget.cget("state")) != "disabled"
         ]
-        if self._active_page == "preferences":
+        if self._active_page == "shortcuts":
             targets.extend(
                 (
                     self._panel_hotkey._entry,
@@ -235,7 +289,6 @@ class SettingsWindow(ctk.CTkToplevel):
             for widget in (
                 self._apply_hotkeys_button,
                 self._startup,
-                self._updates,
             ):
                 target = self._focus_target(widget)
                 if target is not None:
@@ -303,9 +356,11 @@ class SettingsWindow(ctk.CTkToplevel):
         delta = int(getattr(event, "delta", 0))
         if delta == 0:
             return None
-        scrollable = (
-            self._preferences_scroll if self._active_page == "preferences" else self._list
+        scrollable = self._list if self._active_page == "items" else self._page_scrolls.get(
+            self._active_page
         )
+        if scrollable is None:
+            return None
         canvas: tk.Canvas = scrollable._parent_canvas
         if canvas.yview() == (0.0, 1.0):
             return None
@@ -325,7 +380,7 @@ class SettingsWindow(ctk.CTkToplevel):
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
         sidebar.grid_columnconfigure(0, weight=1)
-        sidebar.grid_rowconfigure(4, weight=1)
+        sidebar.grid_rowconfigure(6, weight=1)
 
         brand = ctk.CTkFrame(sidebar, fg_color="transparent")
         self._brand = brand
@@ -378,11 +433,23 @@ class SettingsWindow(ctk.CTkToplevel):
             text="01   바로가기",
             command=lambda: self._select_page("items"),
         )
-        self._nav_buttons["preferences"] = self._nav_button(
+        self._nav_buttons["shortcuts"] = self._nav_button(
             sidebar,
             row=3,
-            text="02   환경 설정",
-            command=lambda: self._select_page("preferences"),
+            text="02   단축키·시작",
+            command=lambda: self._select_page("shortcuts"),
+        )
+        self._nav_buttons["appearance"] = self._nav_button(
+            sidebar,
+            row=4,
+            text="03   화면·패널",
+            command=lambda: self._select_page("appearance"),
+        )
+        self._nav_buttons["about"] = self._nav_button(
+            sidebar,
+            row=5,
+            text="04   앱 정보",
+            command=lambda: self._select_page("about"),
         )
 
         hint = ctk.CTkFrame(
@@ -393,7 +460,7 @@ class SettingsWindow(ctk.CTkToplevel):
             border_color=BORDER,
         )
         self._sidebar_hint = hint
-        hint.grid(row=5, column=0, padx=16, pady=18, sticky="sew")
+        hint.grid(row=7, column=0, padx=16, pady=18, sticky="sew")
         ctk.CTkLabel(
             hint,
             text="빠른 실행",
@@ -437,6 +504,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def _build_items_page(self) -> None:
         page = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
         self._items_page = page
+        self._pages["items"] = page
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
 
@@ -551,33 +619,37 @@ class SettingsWindow(ctk.CTkToplevel):
         self._list.grid(row=1, column=0, padx=(12, 6), pady=(0, 12), sticky="nsew")
         self._list.grid_columnconfigure(0, weight=1)
 
-    def _build_preferences_page(self) -> None:
+    def _build_section_shell(
+        self,
+        name: str,
+        *,
+        title: str,
+        subtitle: str,
+    ) -> tuple[ctk.CTkFrame, ctk.CTkScrollableFrame]:
         page = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self._preferences_page = page
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
 
         header = ctk.CTkFrame(page, fg_color="transparent")
-        self._preferences_header = header
         header.grid(row=0, column=0, padx=28, pady=(26, 18), sticky="ew")
-        self._preferences_title = ctk.CTkLabel(
+        title_label = ctk.CTkLabel(
             header,
-            text="환경 설정",
+            text=title,
             font=font(24, "bold"),
             text_color=TEXT,
             anchor="w",
             width=1,
         )
-        self._preferences_title.pack(fill="x")
-        self._preferences_subtitle = ctk.CTkLabel(
+        title_label.pack(fill="x")
+        subtitle_label = ctk.CTkLabel(
             header,
-            text="패널 모양과 Windows 동작 방식을 설정합니다.",
+            text=subtitle,
             font=font(11),
             text_color=MUTED,
             anchor="w",
             width=1,
         )
-        self._preferences_subtitle.pack(fill="x", pady=(3, 0))
+        subtitle_label.pack(fill="x", pady=(3, 0))
 
         scroll = ctk.CTkScrollableFrame(
             page,
@@ -586,9 +658,132 @@ class SettingsWindow(ctk.CTkToplevel):
             scrollbar_button_color=BORDER,
             scrollbar_button_hover_color=MUTED,
         )
-        self._preferences_scroll = scroll
         scroll.grid(row=1, column=0, padx=(28, 22), pady=(0, 28), sticky="nsew")
         scroll.grid_columnconfigure(0, weight=1)
+
+        self._pages[name] = page
+        self._page_headers[name] = header
+        self._page_subtitles[name] = subtitle_label
+        self._page_scrolls[name] = scroll
+        return page, scroll
+
+    def _build_shortcuts_page(self) -> None:
+        page, scroll = self._build_section_shell(
+            "shortcuts",
+            title="단축키·시작",
+            subtitle="키보드 호출 방식과 Windows 로그인 동작을 관리합니다.",
+        )
+        self._shortcuts_page = page
+        self._shortcuts_scroll = scroll
+        # Private compatibility aliases for older runtime integrations.  The
+        # public navigation now uses the explicit four-section names.
+        self._preferences_page = page
+        self._preferences_header = self._page_headers["shortcuts"]
+        self._preferences_title = next(
+            child
+            for child in self._preferences_header.winfo_children()
+            if isinstance(child, ctk.CTkLabel)
+        )
+        self._preferences_subtitle = self._page_subtitles["shortcuts"]
+        self._preferences_scroll = scroll
+
+        hotkeys = self._settings_card(
+            scroll,
+            row=0,
+            title="키보드 단축키",
+            description="다른 앱과 겹치면 수정한 뒤 적용하세요.",
+            content_below=True,
+        )
+        self._hotkeys_card = hotkeys
+        fields = ctk.CTkFrame(hotkeys, fg_color="transparent")
+        self._hotkey_fields = fields
+        fields.grid(row=2, column=0, columnspan=2, padx=18, pady=(3, 18), sticky="ew")
+        fields.grid_columnconfigure(0, weight=1)
+        fields.grid_columnconfigure(1, weight=1)
+        self._panel_hotkey = self._hotkey_field(fields, 0, "패널 열기")
+        self._quick_hotkey = self._hotkey_field(fields, 1, "탐색기에서 빠른 등록")
+        self._panel_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
+        self._quick_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
+        self._apply_hotkeys_button = ctk.CTkButton(
+            fields,
+            text="변경사항 적용",
+            width=112,
+            height=36,
+            corner_radius=9,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            font=font(11, "bold"),
+            command=self._apply_hotkeys,
+        )
+        self._apply_hotkeys_button.grid(row=2, column=1, pady=(12, 0), sticky="e")
+        self._enable_keyboard_button(self._apply_hotkeys_button)
+        self._hotkey_warning = ctk.CTkLabel(
+            fields,
+            text="",
+            width=1,
+            wraplength=420,
+            font=font(10),
+            text_color=WARNING,
+            anchor="w",
+            justify="left",
+        )
+        self._hotkey_warning.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            padx=0,
+            pady=(8, 0),
+            sticky="ew",
+        )
+        self._hotkey_warning.grid_remove()
+
+        startup = self._settings_card(
+            scroll,
+            row=1,
+            title="Windows 시작 시 실행",
+            description="로그인하면 QuickAccess를 트레이에서 자동으로 시작합니다.",
+        )
+        self._startup_card = startup
+        self._startup_variable = tk.BooleanVar(value=False)
+        self._startup_controls = ctk.CTkFrame(startup, fg_color="transparent")
+        self._startup_controls.grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            padx=18,
+            pady=14,
+            sticky="e",
+        )
+        self._startup_status = ctk.CTkLabel(
+            self._startup_controls,
+            text="실제 상태 · 확인 전",
+            height=28,
+            corner_radius=8,
+            fg_color=SURFACE_ALT,
+            text_color=MUTED,
+            font=font(9, "bold"),
+        )
+        self._startup_status.pack(side="left", padx=(0, 12), ipadx=8)
+        self._startup = ctk.CTkSwitch(
+            self._startup_controls,
+            text="",
+            width=46,
+            variable=self._startup_variable,
+            progress_color=ACCENT,
+            button_hover_color=ACCENT_HOVER,
+            command=self._startup_changed,
+        )
+        self._startup.pack(side="left")
+        self._enable_keyboard_switch(self._startup)
+
+    def _build_appearance_page(self) -> None:
+        page, scroll = self._build_section_shell(
+            "appearance",
+            title="화면·패널",
+            subtitle="눈에 편한 스타일과 한 줄에 표시할 항목 수를 선택합니다.",
+        )
+        self._appearance_page = page
+        self._appearance_scroll = scroll
 
         appearance = self._settings_card(
             scroll,
@@ -644,79 +839,18 @@ class SettingsWindow(ctk.CTkToplevel):
         self._columns.grid(row=0, column=1, rowspan=2, padx=18, pady=16, sticky="e")
         self._enable_segmented_keyboard(self._columns)
 
-        hotkeys = self._settings_card(
-            scroll,
-            row=2,
-            title="키보드 단축키",
-            description="다른 앱과 겹치면 수정한 뒤 적용하세요.",
-            content_below=True,
+    def _build_about_page(self) -> None:
+        page, scroll = self._build_section_shell(
+            "about",
+            title="앱 정보",
+            subtitle="업데이트, 설정 백업, 버전 정보를 한곳에서 확인합니다.",
         )
-        self._hotkeys_card = hotkeys
-        fields = ctk.CTkFrame(hotkeys, fg_color="transparent")
-        self._hotkey_fields = fields
-        fields.grid(row=2, column=0, columnspan=2, padx=18, pady=(3, 18), sticky="ew")
-        fields.grid_columnconfigure(0, weight=1)
-        fields.grid_columnconfigure(1, weight=1)
-        self._panel_hotkey = self._hotkey_field(fields, 0, "패널 열기")
-        self._quick_hotkey = self._hotkey_field(fields, 1, "탐색기에서 빠른 등록")
-        self._panel_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
-        self._quick_hotkey.bind("<KeyRelease>", self._hotkey_edited, add="+")
-        self._apply_hotkeys_button = ctk.CTkButton(
-            fields,
-            text="변경사항 적용",
-            width=112,
-            height=36,
-            corner_radius=9,
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOVER,
-            font=font(11, "bold"),
-            command=self._apply_hotkeys,
-        )
-        self._apply_hotkeys_button.grid(row=2, column=1, pady=(12, 0), sticky="e")
-        self._enable_keyboard_button(self._apply_hotkeys_button)
-        self._hotkey_warning = ctk.CTkLabel(
-            fields,
-            text="",
-            width=1,
-            wraplength=420,
-            font=font(10),
-            text_color=WARNING,
-            anchor="w",
-            justify="left",
-        )
-        self._hotkey_warning.grid(
-            row=3,
-            column=0,
-            columnspan=2,
-            padx=0,
-            pady=(8, 0),
-            sticky="ew",
-        )
-        self._hotkey_warning.grid_remove()
-
-        startup = self._settings_card(
-            scroll,
-            row=3,
-            title="Windows 시작 시 실행",
-            description="로그인하면 QuickAccess를 트레이에서 자동으로 시작합니다.",
-        )
-        self._startup_card = startup
-        self._startup_variable = tk.BooleanVar(value=False)
-        self._startup = ctk.CTkSwitch(
-            startup,
-            text="",
-            width=46,
-            variable=self._startup_variable,
-            progress_color=ACCENT,
-            button_hover_color=ACCENT_HOVER,
-            command=self._startup_changed,
-        )
-        self._startup.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
-        self._enable_keyboard_switch(self._startup)
+        self._about_page = page
+        self._about_scroll = scroll
 
         updates = self._settings_card(
             scroll,
-            row=4,
+            row=0,
             title="업데이트 확인",
             description="켜면 시작할 때 GitHub에서 새 버전을 확인합니다.",
         )
@@ -734,9 +868,78 @@ class SettingsWindow(ctk.CTkToplevel):
         self._updates.grid(row=0, column=1, rowspan=2, padx=22, pady=16, sticky="e")
         self._enable_keyboard_switch(self._updates)
 
+        transfer = self._settings_card(
+            scroll,
+            row=1,
+            title="설정 백업",
+            description="바로가기와 환경 설정을 JSON 파일로 옮길 수 있습니다.",
+            content_below=True,
+        )
+        self._transfer_card = transfer
+        transfer_actions = ctk.CTkFrame(transfer, fg_color="transparent")
+        self._transfer_actions = transfer_actions
+        transfer_actions.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            padx=18,
+            pady=(4, 18),
+            sticky="ew",
+        )
+        transfer_actions.grid_columnconfigure(0, weight=1)
+        actions_available = bool(
+            self._actions.import_config or self._actions.export_config
+        )
+        self._transfer_hint = ctk.CTkLabel(
+            transfer_actions,
+            text=(
+                "백업 파일을 가져오거나 현재 설정을 내보냅니다."
+                if actions_available
+                else "가져오기·내보내기 연결을 준비 중입니다."
+            ),
+            width=1,
+            font=font(9),
+            text_color=MUTED,
+            anchor="w",
+        )
+        self._transfer_hint.grid(row=0, column=0, padx=(0, 12), sticky="ew")
+        self._import_button = ctk.CTkButton(
+            transfer_actions,
+            text="가져오기",
+            width=88,
+            height=34,
+            corner_radius=9,
+            fg_color=SURFACE_ALT,
+            hover_color=SURFACE_HOVER,
+            text_color=TEXT,
+            border_width=1,
+            border_color=BORDER,
+            font=font(10, "bold"),
+            state="normal" if self._actions.import_config is not None else "disabled",
+            command=self._import_config,
+        )
+        self._import_button.grid(row=0, column=1, padx=(0, 8))
+        self._enable_keyboard_button(self._import_button)
+        self._export_button = ctk.CTkButton(
+            transfer_actions,
+            text="내보내기",
+            width=88,
+            height=34,
+            corner_radius=9,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            font=font(10, "bold"),
+            state="normal" if self._actions.export_config is not None else "disabled",
+            command=self._export_config,
+        )
+        self._export_button.grid(row=0, column=2)
+        self._enable_keyboard_button(self._export_button)
+        if not actions_available:
+            self._transfer_hint.configure(text_color=MUTED)
+
         app_info = self._settings_card(
             scroll,
-            row=5,
+            row=2,
             title="앱 정보",
             description="현재 설치된 QuickAccess의 버전과 제작 정보를 확인합니다.",
         )
@@ -760,6 +963,47 @@ class SettingsWindow(ctk.CTkToplevel):
             pady=16,
             sticky="e",
         )
+        self._diagnostics_actions = ctk.CTkFrame(app_info, fg_color="transparent")
+        self._diagnostics_actions.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            padx=18,
+            pady=(0, 16),
+            sticky="ew",
+        )
+        self._diagnostics_button = ctk.CTkButton(
+            self._diagnostics_actions,
+            text="진단 정보 복사",
+            width=112,
+            height=34,
+            corner_radius=9,
+            fg_color=SURFACE_ALT,
+            hover_color=SURFACE_HOVER,
+            text_color=TEXT,
+            border_width=1,
+            border_color=BORDER,
+            font=font(10, "bold"),
+            state=(
+                "normal" if self._actions.copy_diagnostics is not None else "disabled"
+            ),
+            command=self._copy_diagnostics,
+        )
+        self._diagnostics_button.pack(side="left")
+        self._enable_keyboard_button(self._diagnostics_button)
+        self._diagnostics_feedback = ctk.CTkLabel(
+            self._diagnostics_actions,
+            text=(
+                "오류 보고에 필요한 정보를 개인정보 없이 복사합니다."
+                if self._actions.copy_diagnostics is not None
+                else "진단 정보 연결을 준비 중입니다."
+            ),
+            width=1,
+            font=font(9),
+            text_color=MUTED,
+            anchor="w",
+        )
+        self._diagnostics_feedback.pack(side="left", padx=(10, 0), fill="x", expand=True)
 
     @staticmethod
     def _app_info_text(*, ultra_compact: bool) -> str:
@@ -843,27 +1087,59 @@ class SettingsWindow(ctk.CTkToplevel):
             pady=(5, 0),
             sticky="ew",
         )
-        entry._entry.configure(takefocus=True)
+        self._enable_keyboard_entry(entry)
         if not hasattr(self, "_hotkey_labels"):
             self._hotkey_labels: list[ctk.CTkLabel] = []
         self._hotkey_labels.append(label_widget)
         return entry
 
     def _select_page(self, page_name: str) -> None:
-        self._active_page = page_name
-        pages = {"items": self._items_page, "preferences": self._preferences_page}
-        for name, page in pages.items():
-            if name == page_name:
+        canonical_name = "shortcuts" if page_name == "preferences" else page_name
+        if canonical_name not in self._pages:
+            raise ValueError(f"unknown settings page: {page_name}")
+        self._active_page = canonical_name
+        for name, page in self._pages.items():
+            if name == canonical_name:
                 page.grid(row=0, column=1, sticky="nsew")
             else:
                 page.grid_forget()
         for name, button in self._nav_buttons.items():
-            active = name == page_name
+            active = name == canonical_name
             button.configure(
                 fg_color=ACCENT_SOFT if active else "transparent",
                 hover_color=ACCENT_SOFT if active else SURFACE_HOVER,
                 text_color=ACCENT if active else MUTED,
             )
+        scroll = self._page_scrolls.get(canonical_name)
+        if scroll is not None:
+            try:
+                scroll._parent_canvas.yview_moveto(0.0)
+            except tk.TclError:
+                pass
+
+    def _queue_responsive_layout(self, event: tk.Event[tk.Misc]) -> None:
+        """Debounce native resize noise and switch only at stable breakpoints."""
+
+        if event.widget is not self or int(getattr(event, "width", 0)) < 1:
+            return
+        if self._resize_after_id is not None:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except tk.TclError:
+                pass
+        logical_width = max(1, int(self._reverse_window_scaling(event.width)))
+        self._resize_after_id = self.after(
+            40,
+            lambda width=logical_width: self._apply_responsive_width(width),
+        )
+
+    def _apply_responsive_width(self, logical_width: int) -> None:
+        self._resize_after_id = None
+        try:
+            if self.winfo_exists():
+                self._apply_compact_layout(logical_width)
+        except tk.TclError:
+            return
 
     def _center_on_first_show(self) -> None:
         self.update_idletasks()
@@ -952,24 +1228,45 @@ class SettingsWindow(ctk.CTkToplevel):
             self._brand_name.grid()
             self._brand_subtitle.grid()
             self._sidebar_section_label.grid()
-        self._nav_buttons["items"].configure(
-            text="항목" if ultra_compact else ("01   항목" if compact else "01   바로가기")
+        normal_nav_labels = {
+            "items": "01   바로가기",
+            "shortcuts": "02   단축키·시작",
+            "appearance": "03   화면·패널",
+            "about": "04   앱 정보",
+        }
+        compact_nav_labels = {
+            "items": "01  항목",
+            "shortcuts": "02  단축키",
+            "appearance": "03  화면",
+            "about": "04  정보",
+        }
+        ultra_nav_labels = {
+            "items": "항목",
+            "shortcuts": "단축키",
+            "appearance": "화면",
+            "about": "정보",
+        }
+        active_nav_labels = (
+            ultra_nav_labels
+            if ultra_compact
+            else compact_nav_labels if compact else normal_nav_labels
         )
-        self._nav_buttons["preferences"].configure(
-            text="설정" if ultra_compact else ("02   설정" if compact else "02   환경 설정")
-        )
+        for name, text in active_nav_labels.items():
+            self._nav_buttons[name].configure(text=text)
         for button in self._nav_buttons.values():
             button.grid_configure(padx=6 if ultra_compact else (8 if compact else 14))
         if compact:
             self._sidebar_hint.grid_remove()
             self._items_subtitle.grid_remove()
-            self._preferences_subtitle.pack_forget()
+            for subtitle in self._page_subtitles.values():
+                subtitle.pack_forget()
             for description in self._settings_descriptions:
                 description.grid_remove()
         else:
             self._sidebar_hint.grid()
             self._items_subtitle.grid()
-            self._preferences_subtitle.pack(fill="x", pady=(3, 0))
+            for subtitle in self._page_subtitles.values():
+                subtitle.pack(fill="x", pady=(3, 0))
             for description in self._settings_descriptions:
                 description.grid()
 
@@ -1036,14 +1333,14 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=(0, 12),
                 sticky="ew",
             )
-            self._startup.grid_configure(
+            self._startup_controls.grid_configure(
                 row=2,
                 column=0,
                 columnspan=2,
                 rowspan=1,
-                padx=18,
+                padx=12,
                 pady=(0, 12),
-                sticky="w",
+                sticky="ew",
             )
             self._updates.grid_configure(
                 row=2,
@@ -1055,7 +1352,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 sticky="w",
             )
             self._app_info_details.configure(
-                text=self._app_info_text(ultra_compact=ultra_compact)
+                text=self._app_info_text(ultra_compact=ultra_compact),
+                width=1 if ultra_compact else 120,
             )
             self._app_info_details.grid_configure(
                 row=2,
@@ -1066,6 +1364,64 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=(0, 12),
                 sticky="ew",
             )
+            self._diagnostics_actions.grid_configure(
+                row=3,
+                column=0,
+                columnspan=2,
+                padx=12,
+                pady=(0, 12),
+                sticky="ew",
+            )
+            self._diagnostics_button.pack_forget()
+            self._diagnostics_feedback.pack_forget()
+            if ultra_compact:
+                self._diagnostics_button.configure(width=1)
+                self._diagnostics_button.pack(fill="x")
+                self._diagnostics_feedback.configure(wraplength=120)
+                self._diagnostics_feedback.pack(fill="x", pady=(7, 0))
+            else:
+                self._diagnostics_button.configure(width=112)
+                self._diagnostics_button.pack(side="left")
+                self._diagnostics_feedback.configure(wraplength=260)
+                self._diagnostics_feedback.pack(
+                    side="left",
+                    padx=(10, 0),
+                    fill="x",
+                    expand=True,
+                )
+            self._transfer_hint.grid_configure(
+                row=0,
+                column=0,
+                columnspan=2,
+                padx=0,
+                pady=(0, 9),
+                sticky="ew",
+            )
+            self._transfer_hint.configure(
+                wraplength=140 if ultra_compact else 260,
+            )
+            self._transfer_actions.grid_configure(
+                padx=10 if ultra_compact else 14,
+            )
+            compact_transfer_gap = 2 if ultra_compact else 4
+            compact_transfer_width = 1 if ultra_compact else 72
+            self._import_button.configure(width=compact_transfer_width)
+            self._export_button.configure(width=compact_transfer_width)
+            self._import_button.grid_configure(
+                row=1,
+                column=0,
+                padx=(0, compact_transfer_gap),
+                sticky="ew",
+            )
+            self._export_button.grid_configure(
+                row=1,
+                column=1,
+                padx=(compact_transfer_gap, 0),
+                sticky="ew",
+            )
+            self._transfer_actions.grid_columnconfigure(0, weight=1)
+            self._transfer_actions.grid_columnconfigure(1, weight=1)
+            self._transfer_actions.grid_columnconfigure(2, weight=0)
             self._layout_hotkeys_for_narrow_width()
         else:
             self._items_header.grid_columnconfigure(1, weight=0)
@@ -1115,13 +1471,13 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=16,
                 sticky="e",
             )
-            self._startup.grid_configure(
+            self._startup_controls.grid_configure(
                 row=0,
                 column=1,
                 columnspan=1,
                 rowspan=2,
-                padx=22,
-                pady=16,
+                padx=18,
+                pady=14,
                 sticky="e",
             )
             self._updates.grid_configure(
@@ -1134,7 +1490,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 sticky="e",
             )
             self._app_info_details.configure(
-                text=self._app_info_text(ultra_compact=False)
+                text=self._app_info_text(ultra_compact=False),
+                width=120,
             )
             self._app_info_details.grid_configure(
                 row=0,
@@ -1144,6 +1501,52 @@ class SettingsWindow(ctk.CTkToplevel):
                 padx=18,
                 pady=16,
                 sticky="e",
+            )
+            self._diagnostics_actions.grid_configure(
+                row=2,
+                column=0,
+                columnspan=2,
+                padx=18,
+                pady=(0, 16),
+                sticky="ew",
+            )
+            self._diagnostics_button.pack_forget()
+            self._diagnostics_feedback.pack_forget()
+            self._diagnostics_button.configure(width=112)
+            self._diagnostics_button.pack(side="left")
+            self._diagnostics_feedback.configure(wraplength=390)
+            self._diagnostics_feedback.pack(
+                side="left",
+                padx=(10, 0),
+                fill="x",
+                expand=True,
+            )
+            self._transfer_actions.grid_columnconfigure(0, weight=1)
+            self._transfer_actions.grid_columnconfigure(1, weight=0)
+            self._transfer_actions.grid_columnconfigure(2, weight=0)
+            self._transfer_hint.grid_configure(
+                row=0,
+                column=0,
+                columnspan=1,
+                padx=(0, 12),
+                pady=0,
+                sticky="ew",
+            )
+            self._transfer_hint.configure(wraplength=420)
+            self._transfer_actions.grid_configure(padx=18)
+            self._import_button.configure(width=88)
+            self._export_button.configure(width=88)
+            self._import_button.grid_configure(
+                row=0,
+                column=1,
+                padx=(0, 8),
+                sticky="",
+            )
+            self._export_button.grid_configure(
+                row=0,
+                column=2,
+                padx=0,
+                sticky="",
             )
             self._layout_hotkeys_for_normal_width()
 
@@ -1155,18 +1558,20 @@ class SettingsWindow(ctk.CTkToplevel):
             padx=page_padding,
             pady=(0, page_padding),
         )
-        self._preferences_header.grid_configure(
-            padx=page_padding,
-            pady=(18 if compact else 26, 12 if compact else 18),
-        )
+        for header in self._page_headers.values():
+            header.grid_configure(
+                padx=page_padding,
+                pady=(18 if compact else 26, 12 if compact else 18),
+            )
         # CTkScrollableFrame.grid() manages its outer frame, but the inherited
         # grid_configure() would accidentally re-parent the inner content frame
         # from the canvas to Tk's grid manager.  Configure the outer frame
         # directly so wheel and scrollbar movement keep moving the cards.
-        self._preferences_scroll._parent_frame.grid_configure(
-            padx=(page_padding, max(8, page_padding - 6)),
-            pady=(0, page_padding),
-        )
+        for scroll in self._page_scrolls.values():
+            scroll._parent_frame.grid_configure(
+                padx=(page_padding, max(8, page_padding - 6)),
+                pady=(0, page_padding),
+            )
         if needs_refresh:
             self.refresh()
 
@@ -1278,6 +1683,7 @@ class SettingsWindow(ctk.CTkToplevel):
             )
             self._startup_variable.set(config.run_on_startup)
             self._updates_variable.set(config.check_updates)
+            self._refresh_startup_status()
             if not self._hotkeys_dirty:
                 self._replace_entry(self._panel_hotkey, config.hotkey)
                 self._replace_entry(self._quick_hotkey, config.quick_add_hotkey)
@@ -1560,10 +1966,108 @@ class SettingsWindow(ctk.CTkToplevel):
             self._actions.set_startup(bool(self._startup_variable.get()))
             self.refresh()
 
+    @staticmethod
+    def _startup_status_presentation(status: object) -> tuple[str, str]:
+        """Translate a controller-owned registry snapshot into concise UI text."""
+
+        if isinstance(status, bool):
+            return (
+                ("실제 상태 · 등록됨", ACCENT)
+                if status
+                else ("실제 상태 · 미등록", MUTED)
+            )
+        if status is None:
+            return "실제 상태 · 확인 전", MUTED
+        state = getattr(status, "state", status)
+        value = getattr(state, "value", state)
+        normalized = str(value).strip().casefold()
+        if normalized == "correct":
+            return "실제 상태 · 정상 등록", ACCENT
+        if normalized == "absent":
+            return "실제 상태 · 미등록", MUTED
+        if normalized == "stale":
+            return "실제 상태 · 이전 경로", WARNING
+        if normalized == "unreadable":
+            return "실제 상태 · 확인 불가", WARNING
+        if normalized:
+            return f"실제 상태 · {str(value).strip()}", MUTED
+        return "실제 상태 · 확인 전", MUTED
+
+    def _refresh_startup_status(self) -> None:
+        provider = self._actions.get_startup_status
+        if provider is None:
+            text, color = "실제 상태 · 확인 전", MUTED
+        else:
+            try:
+                text, color = self._startup_status_presentation(provider())
+            except Exception:
+                text, color = "실제 상태 · 확인 실패", WARNING
+        self._startup_status.configure(text=text, text_color=color)
+
     def _updates_changed(self) -> None:
         if not self._refreshing:
             self._actions.set_update_checks(bool(self._updates_variable.get()))
             self.refresh()
+
+    def _run_config_transfer(
+        self,
+        callback: Callable[[], bool] | None,
+        *,
+        success_text: str,
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            succeeded = callback()
+        except Exception:
+            self._transfer_hint.configure(
+                text="작업을 완료하지 못했습니다. 다시 시도해 주세요.",
+                text_color=WARNING,
+            )
+            return
+        if succeeded is False:
+            self._transfer_hint.configure(
+                text="작업이 취소되었거나 적용되지 않았습니다.",
+                text_color=MUTED,
+            )
+            return
+        self._transfer_hint.configure(text=success_text, text_color=ACCENT)
+        self.refresh()
+
+    def _import_config(self) -> None:
+        self._run_config_transfer(
+            self._actions.import_config,
+            success_text="설정을 가져왔습니다.",
+        )
+
+    def _export_config(self) -> None:
+        self._run_config_transfer(
+            self._actions.export_config,
+            success_text="설정을 내보냈습니다.",
+        )
+
+    def _copy_diagnostics(self) -> None:
+        callback = self._actions.copy_diagnostics
+        if callback is None:
+            return
+        try:
+            succeeded = callback()
+        except Exception:
+            self._diagnostics_feedback.configure(
+                text="진단 정보를 복사하지 못했습니다. 다시 시도해 주세요.",
+                text_color=WARNING,
+            )
+            return
+        if succeeded is False:
+            self._diagnostics_feedback.configure(
+                text="진단 정보가 복사되지 않았습니다.",
+                text_color=WARNING,
+            )
+            return
+        self._diagnostics_feedback.configure(
+            text="진단 정보를 클립보드에 복사했습니다.",
+            text_color=ACCENT,
+        )
 
     def _apply_hotkeys(self) -> None:
         applied = self._actions.set_hotkeys(

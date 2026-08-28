@@ -146,6 +146,88 @@ class ExplorerQuickAddTests(unittest.TestCase):
         self.assertEqual(result.source, ExplorerTargetSource.CURRENT_FOLDER)
         self.assertEqual(result.item_type, "folder")
 
+    def test_multiple_selected_items_are_returned_in_explorer_order(self) -> None:
+        window = _Window(22, [], r"C:\Ignored")
+        items = [
+            _Item(r"C:\품질\검사.xlsx"),
+            _Item(r"D:\사진", is_folder=True),
+            _ShortcutItem(r"C:\Desktop\업무.lnk", r"D:\실제 대상"),
+        ]
+        selected = type(
+            "Selected",
+            (),
+            {
+                "Count": len(items),
+                "Item": lambda _self, index: items[index],
+            },
+        )()
+        window.Document.SelectedItems = lambda: selected
+        service, _runtime = self.make_service(_Shell([window]))
+
+        result = service.get_target()
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            [r"C:\품질\검사.xlsx", r"D:\사진", r"C:\Desktop\업무.lnk"],
+            [target.path for target in result.targets],
+        )
+        self.assertEqual(["file", "folder", "file"], [t.item_type for t in result.targets])
+        self.assertEqual(result.path, result.targets[0].path)
+
+    def test_multi_selection_is_atomic_when_one_item_is_virtual(self) -> None:
+        window = _Window(22, [], r"C:\Ignored")
+        items = [_Item(r"C:\Valid.txt"), _Item("::{virtual}"), _Item(r"D:\Later.txt")]
+        selected = type(
+            "Selected",
+            (),
+            {"Count": len(items), "Item": lambda _self, index: items[index]},
+        )()
+        window.Document.SelectedItems = lambda: selected
+        service, _runtime = self.make_service(_Shell([window]))
+
+        result = service.get_target()
+
+        self.assertFalse(result.success)
+        self.assertEqual((), result.targets)
+        self.assertEqual(ExplorerErrorCode.NO_FILESYSTEM_PATH, result.error_code)
+
+    def test_duplicate_selected_paths_are_deduplicated_case_insensitively(self) -> None:
+        service, _runtime = self.make_service(
+            _Shell(
+                [
+                    _Window(
+                        22,
+                        [r"C:\Work\Report.xlsx", r"c:\work\.\REPORT.xlsx"],
+                        r"C:\Work",
+                    )
+                ]
+            )
+        )
+
+        result = service.get_target()
+
+        self.assertTrue(result.success)
+        self.assertEqual(1, len(result.targets))
+
+    def test_selection_limit_fails_before_enumerating_items(self) -> None:
+        window = _Window(22, [], r"C:\Ignored")
+
+        class TooMany:
+            Count = ExplorerQuickAddService.MAX_SELECTED_ITEMS + 1
+
+            @staticmethod
+            def Item(_index: int) -> object:
+                raise AssertionError("oversized selection must not be enumerated")
+
+        window.Document.SelectedItems = lambda: TooMany()
+        service, _runtime = self.make_service(_Shell([window]))
+
+        result = service.get_target()
+
+        self.assertFalse(result.success)
+        self.assertEqual(ExplorerErrorCode.TOO_MANY_SELECTED, result.error_code)
+        self.assertIn("최대 50개", result.error or "")
+
     def test_unknown_selection_type_does_not_require_filesystem_probe(self) -> None:
         window = _Window(22, [], r"C:\Folder")
         selected = type(

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass
 import math
+import sys
 import tkinter as tk
 
 import customtkinter as ctk
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 
 from ..models import LauncherConfig, LauncherItem
+from ..search import LauncherSearchIndex
 from ..services.icons import icon_key
 from ..services.monitor import Point, Rect, Size, clamp_window_to_work_area
 from ..services.validation import PathStatus
@@ -51,6 +56,11 @@ _GLYPH_FILE = "\uE8A5"
 _GLYPH_LINK = "\uE71B"
 _GLYPH_SETTINGS = "\uE713"
 _TRANSPARENT_KEY = "#010203"
+_DWM_CLOAK = 13
+_DWM_CLOAKED = 14
+_DWM_CLOAKED_APP = 0x00000001
+_FOCUS_LOSS_SETTLE_MS = 40
+_FOCUS_ARMING_MS = 240
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +183,17 @@ def _status_text(item: LauncherItem, status: PathStatus | None) -> str:
     return "폴더" if item.type == "folder" else "파일"
 
 
+def _is_broken_path_status(status: PathStatus | None) -> bool:
+    """Return whether a status requires replacing the target before launch."""
+
+    if status in (PathStatus.MISSING, PathStatus.ERROR):
+        return True
+    # Keep compatibility if validation later splits an inaccessible target
+    # from the current generic ERROR state.
+    inaccessible = getattr(PathStatus, "INACCESSIBLE", None)
+    return inaccessible is not None and status is inaccessible
+
+
 class _LauncherCard(ctk.CTkFrame):
     """A compact two-line launcher card with mouse and keyboard activation."""
 
@@ -188,7 +209,7 @@ class _LauncherCard(ctk.CTkFrame):
     ) -> None:
         self._status_state = None if status in (None, PathStatus.VALID) else status
         self._current_icon = icon
-        self._broken = self._status_state is not None
+        self._broken = _is_broken_path_status(status)
         self._timed_out = status is PathStatus.TIMEOUT
         if self._timed_out:
             self._style_state = "warning"
@@ -322,7 +343,7 @@ class _LauncherCard(ctk.CTkFrame):
         if status_changed:
             previous_broken = self._broken
             self._status_state = normalized_status
-            self._broken = normalized_status is not None
+            self._broken = _is_broken_path_status(status)
             self._timed_out = status is PathStatus.TIMEOUT
             next_style = (
                 "warning"
@@ -449,14 +470,16 @@ class _OwnedScrollableFrame(ctk.CTkScrollableFrame):
 
 
 class PopupPanel(ctk.CTkToplevel):
-    """A single reusable topmost panel; all methods run on the Tk thread."""
+    """A monitor-local reusable topmost panel; all methods run on Tk."""
 
     def __init__(self, root: tk.Misc, actions: PopupActions) -> None:
         super().__init__(root)
         self._actions = actions
         self._visible = False
-        self._arming_focus = False
         self._show_generation = 0
+        self._focus_arming_generation: int | None = None
+        self._focus_arm_after: str | None = None
+        self._focus_loss_after: str | None = None
         self._render_signature: tuple[object, ...] | None = None
         self._dynamic_signature: tuple[object, ...] | None = None
         self._card_dynamic_states: dict[str, tuple[object, ...]] = {}
@@ -466,10 +489,30 @@ class PopupPanel(ctk.CTkToplevel):
         self._scrolling = False
         self._render_count = 0
         self._dynamic_update_count = 0
+        self._prepared_dpi_scale: float | None = None
+        self._prepared_monitor_signature: tuple[object, ...] | None = None
+        # Windows can keep a fully realized popup in DWM while cloaking it
+        # between invocations.  This avoids the occasionally very expensive
+        # withdraw/deiconify remap on the hotkey path.  The optimization is
+        # enabled only after both the native cloak and one hidden map succeed;
+        # every unsupported/error path retains Tk's ordinary withdraw flow.
+        self._warm_mapped = False
+        self._native_cloak_available: bool | None = None
+        self._native_window_handle: int | None = None
         self.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self._cards: list[_LauncherCard] = []
+        self._card_by_item_id: dict[str, _LauncherCard] = {}
+        self._visible_cards: list[_LauncherCard] = []
+        self._search_index: LauncherSearchIndex | None = None
+        self._search_variable: tk.StringVar | None = None
+        self._search_trace_id: str | None = None
+        self._search_entry: ctk.CTkEntry | None = None
+        self._search_empty_state: ctk.CTkFrame | None = None
+        self._search_empty_button: ctk.CTkButton | None = None
+        self._showing_search_empty = False
+        self._layout_viewport_height = BUTTON_HEIGHT
         self._items_frame: _OwnedScrollableFrame | None = None
         self._scroll_canvas: tk.Canvas | None = None
         self._empty_state: ctk.CTkFrame | None = None
@@ -488,7 +531,8 @@ class PopupPanel(ctk.CTkToplevel):
             # ``-transparentcolor`` is Windows-specific; a matching surface
             # background remains a clean fallback for tests and other Tk ports.
             self.configure(fg_color=SURFACE)
-        self.bind("<Escape>", lambda _event: self.hide())
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<Control-f>", self._focus_search, add="+")
         self.bind("<FocusOut>", self._on_focus_out, add="+")
 
     @staticmethod
@@ -534,6 +578,32 @@ class PopupPanel(ctk.CTkToplevel):
     def dynamic_update_count(self) -> int:
         return self._dynamic_update_count
 
+    @property
+    def warm_mapping_enabled(self) -> bool:
+        """Whether this popup is parked in DWM instead of being remapped."""
+
+        return self._warm_mapped
+
+    def apply_runtime_state(
+        self,
+        config: LauncherConfig,
+        statuses: Mapping[str, PathStatus],
+        icons: Mapping[str, ctk.CTkImage] | None = None,
+    ) -> bool:
+        """Update validation and icon state without remapping the popup.
+
+        Background results can arrive while the user is navigating the panel.
+        Keeping this path separate from :meth:`show` preserves focus, scroll
+        position and the current mapped window while updating only cards whose
+        runtime presentation changed.  ``False`` tells the controller that a
+        structural config change requires a normal layout refresh instead.
+        """
+
+        if self._content_signature(config) != self._render_signature:
+            return False
+        self._update_dynamic_content(config, statuses, icons or {})
+        return True
+
     def show(
         self,
         config: LauncherConfig,
@@ -541,12 +611,75 @@ class PopupPanel(ctk.CTkToplevel):
         anchor: Point,
         work_area: Rect,
         icons: Mapping[str, ctk.CTkImage] | None = None,
+        *,
+        target_dpi_scale: float | None = None,
     ) -> None:
         icons = icons or {}
         self._show_generation += 1
         show_generation = self._show_generation
-        self._arming_focus = True
-        layout_scale = self._get_window_scaling()
+        self._cancel_focus_arming()
+        self._cancel_focus_loss_check()
+        self._focus_arming_generation = show_generation
+        # Search state belongs to one invocation of the launcher.  Restore
+        # the already-created cards while the window is still withdrawn so a
+        # reopened popup never flashes stale results or pays for a remap.
+        self._reset_search_for_show()
+        layout_scale = self._synchronize_dpi_scale(target_dpi_scale)
+        self._layout_popup(
+            config,
+            statuses,
+            anchor,
+            work_area,
+            icons,
+            layout_scale=layout_scale,
+        )
+        self._expose_window()
+        self._visible = True
+        self.after_idle(lambda: self._finish_show(show_generation))
+        # Legacy callers without a known target scale retain the delayed
+        # fallback.  The application supplies a target and selects a popup
+        # already prewarmed on that monitor, so no post-map DPI polling or
+        # recursive second show occurs on the normal hotkey path.
+        if target_dpi_scale is None:
+            self.after(
+                80,
+                lambda: self._settle_dpi(
+                    show_generation,
+                    config,
+                    statuses,
+                    anchor,
+                    work_area,
+                    applied_scale=layout_scale,
+                    attempts_remaining=2,
+                    icons=icons,
+                ),
+            )
+        else:
+            # Confirm the HWND actually landed on the expected DPI at the
+            # next idle turn.  A display-setting race is corrected by a
+            # layout-only pass; it never maps, focuses or calls show again.
+            self.after_idle(
+                lambda: self._validate_mapped_dpi(
+                    show_generation,
+                    target_dpi_scale,
+                    config,
+                    statuses,
+                    anchor,
+                    work_area,
+                    icons,
+                )
+            )
+
+    def _layout_popup(
+        self,
+        config: LauncherConfig,
+        statuses: Mapping[str, PathStatus],
+        anchor: Point,
+        work_area: Rect,
+        icons: Mapping[str, ctk.CTkImage],
+        *,
+        layout_scale: float,
+    ) -> None:
         width, height, columns, viewport_height = popup_dimensions(
             len(config.items),
             config.columns,
@@ -576,23 +709,6 @@ class PopupPanel(ctk.CTkToplevel):
         self.geometry(geometry_string(width, height, position))
         if self._scroll_canvas is not None:
             self._scroll_canvas.yview_moveto(0.0)
-        self.deiconify()
-        self.lift()
-        self._visible = True
-        self.after_idle(lambda: self._finish_show(show_generation))
-        self.after(
-            80,
-            lambda: self._settle_dpi(
-                show_generation,
-                config,
-                statuses,
-                anchor,
-                work_area,
-                applied_scale=layout_scale,
-                attempts_remaining=2,
-                icons=icons,
-            ),
-        )
 
     def prepare(
         self,
@@ -600,12 +716,36 @@ class PopupPanel(ctk.CTkToplevel):
         statuses: Mapping[str, PathStatus],
         work_area: Rect,
         icons: Mapping[str, ctk.CTkImage] | None = None,
+        *,
+        target_dpi_scale: float | None = None,
     ) -> None:
         """Build hidden popup content so the first hotkey press is immediate."""
 
         icons = icons or {}
-        layout_scale = self._get_window_scaling()
-        _width, _height, columns, viewport_height = popup_dimensions(
+        monitor_signature: tuple[object, ...] | None = None
+        needs_staging = False
+        if target_dpi_scale is not None:
+            try:
+                scale_key: object = round(float(target_dpi_scale), 4)
+            except (TypeError, ValueError):
+                scale_key = target_dpi_scale
+            monitor_signature = (
+                work_area.left,
+                work_area.top,
+                work_area.right,
+                work_area.bottom,
+                scale_key,
+            )
+            needs_staging = monitor_signature != self._prepared_monitor_signature
+        if needs_staging:
+            # A withdrawn HWND can still be assigned to a monitor.  Position
+            # it first so CustomTkinter's next background DPI check observes
+            # the same display scale that we apply below.
+            origin = Point(work_area.left + 8, work_area.top + 8)
+            tk.Toplevel.geometry(self, f"{origin.x:+d}{origin.y:+d}")
+            self.update_idletasks()
+        layout_scale = self._synchronize_dpi_scale(target_dpi_scale)
+        width, height, columns, viewport_height = popup_dimensions(
             len(config.items),
             config.columns,
             work_area,
@@ -624,11 +764,210 @@ class PopupPanel(ctk.CTkToplevel):
             render_viewport_height=render_viewport_height,
             icons=icons,
         )
-        if prepared:
-            # Realize geometry while the Toplevel is withdrawn.  Otherwise Tk
+        if needs_staging:
+            origin = Point(work_area.left + 8, work_area.top + 8)
+            self.geometry(geometry_string(width, height, origin))
+        if prepared or needs_staging:
+            # Realize geometry while the Toplevel is hidden.  Otherwise Tk
             # defers initial construction or a hidden re-grid until the first
-            # hotkey deiconifies the panel, moving work back onto that path.
+            # hotkey exposes the panel, moving work back onto that path.
             self.update_idletasks()
+        if monitor_signature is not None:
+            self._prepared_monitor_signature = monitor_signature
+        self._prime_warm_mapping()
+
+    def _get_native_window_handle(self) -> int | None:
+        """Return the outer Win32 HWND used by DWM for this Tk toplevel."""
+
+        if sys.platform != "win32":
+            return None
+        if self._native_window_handle is not None:
+            return self._native_window_handle
+        try:
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            get_parent = user32.GetParent
+            get_parent.argtypes = [wintypes.HWND]
+            get_parent.restype = wintypes.HWND
+            client_handle = int(self.winfo_id())
+            outer_handle = int(get_parent(client_handle) or client_handle)
+        except (AttributeError, OSError, TypeError, ValueError, tk.TclError):
+            return None
+        if outer_handle <= 0:
+            return None
+        self._native_window_handle = outer_handle
+        return outer_handle
+
+    def _set_native_cloak(self, cloaked: bool) -> bool:
+        """Set the documented Windows DWM cloak flag, if supported."""
+
+        handle = self._get_native_window_handle()
+        if handle is None:
+            return False
+        try:
+            dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+            setter = dwmapi.DwmSetWindowAttribute
+            setter.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+                wintypes.LPCVOID,
+                wintypes.DWORD,
+            ]
+            setter.restype = ctypes.c_long
+            value = wintypes.BOOL(bool(cloaked))
+            result = int(
+                setter(
+                    handle,
+                    _DWM_CLOAK,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+        return result == 0
+
+    def _is_native_cloaked(self) -> bool | None:
+        """Return the app-cloak state, or ``None`` when DWM is unavailable."""
+
+        handle = self._get_native_window_handle()
+        if handle is None:
+            return None
+        try:
+            dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+            getter = dwmapi.DwmGetWindowAttribute
+            getter.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+            ]
+            getter.restype = ctypes.c_long
+            value = wintypes.DWORD(0)
+            result = int(
+                getter(
+                    handle,
+                    _DWM_CLOAKED,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
+        if result != 0:
+            return None
+        return bool(int(value.value) & _DWM_CLOAKED_APP)
+
+    def _prime_warm_mapping(self) -> None:
+        """Map once while cloaked so later hotkey opens do not remap HWND."""
+
+        if self._warm_mapped or self._visible or self._native_cloak_available is False:
+            return
+        if not self._set_native_cloak(True):
+            self._native_cloak_available = False
+            return
+        try:
+            self.deiconify()
+            # Pay creation/mapping/DWM synchronization during application
+            # prewarm.  DWM keeps the cloaked window invisible and excludes it
+            # from hit testing while the complete widget tree is realized.
+            self.update_idletasks()
+            if not self.winfo_ismapped() or self._is_native_cloaked() is not True:
+                raise tk.TclError("DWM did not keep the prepared popup cloaked")
+        except tk.TclError:
+            try:
+                self.withdraw()
+            except tk.TclError:
+                pass
+            self._set_native_cloak(False)
+            self._native_cloak_available = False
+            return
+        self._native_cloak_available = True
+        self._warm_mapped = True
+
+    def _expose_window(self) -> None:
+        """Expose a prepared popup, falling back to ordinary Tk mapping."""
+
+        if self._warm_mapped:
+            # Move/reflow occurred while cloaked.  Raise first, then uncloak so
+            # the first user-visible frame is already at its final geometry.
+            self.lift()
+            if self._set_native_cloak(False):
+                self.event_generate("<<QuickAccessVisible>>", when="tail")
+                return
+
+            # A DWM reset is exceptionally rare.  Returning to the conventional
+            # path is safer than leaving a logically visible but cloaked panel.
+            self._warm_mapped = False
+            self._native_cloak_available = False
+            self.withdraw()
+            self._set_native_cloak(False)
+
+        self.deiconify()
+        self.lift()
+        self.event_generate("<<QuickAccessVisible>>", when="tail")
+
+    def _synchronize_dpi_scale(self, target_dpi_scale: float | None) -> float:
+        """Apply a known monitor DPI before the popup becomes visible.
+
+        CustomTkinter 5.2.2 normally discovers cross-monitor changes on a
+        100 ms polling loop and then updates every child widget.  QuickAccess
+        pins that dependency version and updates its tracker once while each
+        pooled popup is still hidden.  Repeated hotkey opens therefore do
+        not pay the full-tree scaling cost or show a stale first frame.
+        """
+
+        if target_dpi_scale is None:
+            return self._get_window_scaling()
+        try:
+            target = float(target_dpi_scale)
+        except (TypeError, ValueError):
+            return self._get_window_scaling()
+        if not math.isfinite(target) or target <= 0:
+            return self._get_window_scaling()
+
+        current = ScalingTracker.window_dpi_scaling_dict.get(self)
+        if current is None or abs(float(current) - target) > 0.001:
+            ScalingTracker.window_dpi_scaling_dict[self] = target
+            ScalingTracker.update_scaling_callbacks_for_window(self)
+            # CTkToplevel temporarily pins min/max dimensions while scaling.
+            # Restore the configured bounds immediately instead of waiting
+            # for its built-in one-second timer.
+            self._set_scaled_min_max()
+        self._prepared_dpi_scale = target
+        return self._get_window_scaling()
+
+    def _validate_mapped_dpi(
+        self,
+        show_generation: int,
+        target_dpi_scale: float,
+        config: LauncherConfig,
+        statuses: Mapping[str, PathStatus],
+        anchor: Point,
+        work_area: Rect,
+        icons: Mapping[str, ctk.CTkImage],
+    ) -> None:
+        if show_generation != self._show_generation or not self._visible:
+            return
+        try:
+            actual_dpi_scale = float(ScalingTracker.get_window_dpi_scaling(self))
+            expected_dpi_scale = float(target_dpi_scale)
+        except (KeyError, TypeError, ValueError, tk.TclError):
+            return
+        if (
+            not math.isfinite(actual_dpi_scale)
+            or actual_dpi_scale <= 0
+            or abs(actual_dpi_scale - expected_dpi_scale) <= 0.01
+        ):
+            return
+        layout_scale = self._synchronize_dpi_scale(actual_dpi_scale)
+        self._layout_popup(
+            config,
+            statuses,
+            anchor,
+            work_area,
+            icons,
+            layout_scale=layout_scale,
+        )
 
     def _ensure_content(
         self,
@@ -666,8 +1005,9 @@ class PopupPanel(ctk.CTkToplevel):
             viewport_height=viewport_height,
             scrolling=scrolling,
         )
+        previous_dynamic_signature = self._dynamic_signature
         self._update_dynamic_content(config, statuses, icons)
-        return layout_changed
+        return layout_changed or self._dynamic_signature != previous_dynamic_signature
 
     @staticmethod
     def _content_signature(config: LauncherConfig) -> tuple[object, ...]:
@@ -745,6 +1085,8 @@ class PopupPanel(ctk.CTkToplevel):
     ) -> None:
         self._clear()
         self._render_count += 1
+        ordered_items = tuple(sorted(config.items, key=lambda value: value.order))
+        self._search_index = LauncherSearchIndex(ordered_items)
 
         shell = ctk.CTkFrame(
             self,
@@ -776,10 +1118,11 @@ class PopupPanel(ctk.CTkToplevel):
         items_frame.grid(row=1, column=0, padx=PADDING, pady=(0, PADDING), sticky="nsew")
 
         self._cards = []
+        self._card_by_item_id = {}
         if not config.items:
             self._add_empty_state(items_frame)
         else:
-            for index, item in enumerate(sorted(config.items, key=lambda value: value.order)):
+            for index, item in enumerate(ordered_items):
                 self._add_item_button(
                     items_frame,
                     item,
@@ -787,6 +1130,8 @@ class PopupPanel(ctk.CTkToplevel):
                     index,
                     icons.get(icon_key(item.path, item.type)),
                 )
+            self._add_search_empty_state(items_frame)
+        self._visible_cards = list(self._cards)
         self._layout_signature = None
         self._apply_layout(
             columns=columns,
@@ -804,8 +1149,26 @@ class PopupPanel(ctk.CTkToplevel):
         items_frame = self._items_frame
         if items_frame is None:
             return False
+        self._layout_viewport_height = viewport_height
+        visible_count = len(self._visible_cards)
+        visible_height = (
+            BUTTON_HEIGHT
+            if self._empty_state is not None or self._showing_search_empty
+            else max(1, math.ceil(visible_count / max(1, columns))) * BUTTON_HEIGHT
+            + max(
+                0,
+                math.ceil(visible_count / max(1, columns)) - 1,
+            )
+            * GAP
+        )
+        effective_scrolling = scrolling and visible_height > viewport_height
         widget_scaling = round(float(items_frame._get_widget_scaling()), 4)
-        signature = (columns, viewport_height, scrolling, widget_scaling)
+        signature = (
+            columns,
+            viewport_height,
+            effective_scrolling,
+            widget_scaling,
+        )
         if signature == self._layout_signature:
             return False
 
@@ -815,22 +1178,10 @@ class PopupPanel(ctk.CTkToplevel):
         self._layout_columns = max(1, columns)
         self._layout_rows = max(
             1,
-            math.ceil(len(self._cards) / self._layout_columns),
+            math.ceil(len(self._visible_cards) / self._layout_columns),
         )
         items_frame.configure(height=viewport_height)
-
-        scrollbar = items_frame._scrollbar
-        canvas = items_frame._parent_canvas
-        if scrolling:
-            if not scrollbar.winfo_manager():
-                scrollbar.grid()
-            self._scroll_canvas = canvas
-        else:
-            if scrollbar.winfo_manager():
-                scrollbar.grid_remove()
-            canvas.yview_moveto(0.0)
-            self._scroll_canvas = None
-        self._scrolling = scrolling
+        self._set_scrolling(effective_scrolling)
 
         self._update_header_layout(compact=self._layout_columns == 1)
         if initial_layout or columns_changed:
@@ -848,12 +1199,23 @@ class PopupPanel(ctk.CTkToplevel):
         items_frame = self._items_frame
         if items_frame is None:
             return
+        for card in self._cards:
+            card.place_forget()
         if self._empty_state is not None:
+            if self._search_empty_state is not None:
+                self._search_empty_state.place_forget()
             self._empty_state.place(x=0, y=0, relwidth=1.0)
             self._sync_content_extent()
             return
 
-        for index, card in enumerate(self._cards):
+        if self._search_empty_state is not None:
+            if self._showing_search_empty:
+                self._search_empty_state.place(x=0, y=0, relwidth=1.0)
+                self._sync_content_extent()
+                return
+            self._search_empty_state.place_forget()
+
+        for index, card in enumerate(self._visible_cards):
             row, column = divmod(index, self._layout_columns)
             card.place(
                 x=column * (BUTTON_WIDTH + GAP),
@@ -867,7 +1229,7 @@ class PopupPanel(ctk.CTkToplevel):
             return
         content_height = (
             BUTTON_HEIGHT
-            if self._empty_state is not None
+            if self._empty_state is not None or self._showing_search_empty
             else self._layout_rows * BUTTON_HEIGHT
             + max(0, self._layout_rows - 1) * GAP
         )
@@ -875,6 +1237,23 @@ class PopupPanel(ctk.CTkToplevel):
             items_frame,
             height=items_frame._apply_widget_scaling(content_height),
         )
+
+    def _set_scrolling(self, scrolling: bool) -> None:
+        items_frame = self._items_frame
+        if items_frame is None:
+            return
+        scrollbar = items_frame._scrollbar
+        canvas = items_frame._parent_canvas
+        if scrolling:
+            if not scrollbar.winfo_manager():
+                scrollbar.grid()
+            self._scroll_canvas = canvas
+        else:
+            if scrollbar.winfo_manager():
+                scrollbar.grid_remove()
+            canvas.yview_moveto(0.0)
+            self._scroll_canvas = None
+        self._scrolling = scrolling
 
     def _settle_dpi(
         self,
@@ -916,10 +1295,35 @@ class PopupPanel(ctk.CTkToplevel):
             return
         try:
             self.focus_force()
-            if self._cards:
-                self._focus_card(0)
+            self._focus_search()
         finally:
-            self._arming_focus = False
+            # DWM uncloaking can deliver a delayed FocusOut after focus_force
+            # has already returned.  An idle callback is too short on slower
+            # mixed-DPI desktops, so protect the initial native transition for
+            # a small bounded interval before outside-focus checks may hide it.
+            self._cancel_focus_arming()
+            self._focus_arm_after = self.after(
+                _FOCUS_ARMING_MS,
+                lambda: self._release_focus_arming(show_generation),
+            )
+
+    def _release_focus_arming(self, show_generation: int) -> None:
+        self._focus_arm_after = None
+        if (
+            show_generation == self._show_generation
+            and self._visible
+            and self._focus_arming_generation == show_generation
+        ):
+            self._focus_arming_generation = None
+
+    def _cancel_focus_arming(self) -> None:
+        after_id, self._focus_arm_after = self._focus_arm_after, None
+        if after_id is None:
+            return
+        try:
+            self.after_cancel(after_id)
+        except tk.TclError:
+            pass
 
     def _build_header(
         self,
@@ -935,7 +1339,7 @@ class PopupPanel(ctk.CTkToplevel):
             corner_radius=0,
         )
         header.grid(row=0, column=0, padx=PADDING, pady=(PADDING, HEADER_GAP), sticky="ew")
-        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(2, weight=1)
         header.grid_propagate(False)
 
         for size in (24, 30):
@@ -961,6 +1365,33 @@ class PopupPanel(ctk.CTkToplevel):
         )
         brand_label.grid(row=0, column=1, sticky="w")
         self._brand_label = brand_label
+
+        self._search_variable = tk.StringVar(master=self, value="")
+        search_entry = ctk.CTkEntry(
+            header,
+            textvariable=self._search_variable,
+            height=32,
+            corner_radius=10,
+            border_width=1,
+            border_color=BORDER,
+            fg_color=SURFACE_ALT,
+            text_color=TEXT,
+            placeholder_text="바로가기 검색",
+            placeholder_text_color=MUTED,
+            font=font(11),
+        )
+        search_entry.grid(row=0, column=2, padx=(10, 8), sticky="ew")
+        search_entry._entry.configure(takefocus=True)
+        search_entry.bind("<Up>", lambda _event: self._focus_search_result(-1), add="+")
+        search_entry.bind("<Down>", lambda _event: self._focus_search_result(1), add="+")
+        search_entry.bind("<Return>", self._activate_first_search_result, add="+")
+        search_entry.bind("<KP_Enter>", self._activate_first_search_result, add="+")
+        self._search_entry = search_entry
+        self._search_trace_id = self._search_variable.trace_add(
+            "write",
+            self._on_search_changed,
+        )
+
         count_badge = ctk.CTkLabel(
             header,
             text=f"{item_count}개",
@@ -972,7 +1403,7 @@ class PopupPanel(ctk.CTkToplevel):
             font=font(10, "bold"),
         )
         if not compact:
-            count_badge.grid(row=0, column=2, padx=(8, 7))
+            count_badge.grid(row=0, column=3, padx=(0, 7))
         self._count_badge = count_badge
         settings_button = ctk.CTkButton(
             header,
@@ -986,10 +1417,11 @@ class PopupPanel(ctk.CTkToplevel):
             text_color=MUTED,
             command=self._open_settings,
         )
-        settings_button.grid(row=0, column=3)
+        settings_button.grid(row=0, column=4)
         self._settings_button = settings_button
         self._enable_keyboard_button(settings_button)
-        self._header_compact = compact
+        self._header_compact = None
+        self._update_header_layout(compact=compact)
 
     def _update_header_layout(self, *, compact: bool) -> None:
         if compact == self._header_compact:
@@ -999,6 +1431,7 @@ class PopupPanel(ctk.CTkToplevel):
             or self._brand_label is None
             or self._count_badge is None
             or self._settings_button is None
+            or self._search_entry is None
         ):
             return
 
@@ -1011,9 +1444,25 @@ class PopupPanel(ctk.CTkToplevel):
         self._brand_mark.grid_configure(padx=(0, 6 if compact else 9))
         self._brand_label.configure(font=font(12 if compact else 14, "bold"))
         if compact:
+            self._brand_mark.grid_remove()
+            self._brand_label.grid_remove()
             self._count_badge.grid_remove()
+            self._search_entry.grid_configure(
+                row=0,
+                column=0,
+                columnspan=4,
+                padx=(0, 6),
+            )
         else:
-            self._count_badge.grid(row=0, column=2, padx=(8, 7))
+            self._brand_mark.grid(row=0, column=0, padx=(0, 9))
+            self._brand_label.grid(row=0, column=1, sticky="w")
+            self._search_entry.grid_configure(
+                row=0,
+                column=2,
+                columnspan=1,
+                padx=(10, 8),
+            )
+            self._count_badge.grid(row=0, column=3, padx=(0, 7))
         self._settings_button.configure(
             width=28 if compact else 32,
             height=28 if compact else 32,
@@ -1047,6 +1496,132 @@ class PopupPanel(ctk.CTkToplevel):
             text_color=MUTED,
         ).pack(pady=(0, 10))
 
+    def _add_search_empty_state(
+        self,
+        parent: ctk.CTkFrame | ctk.CTkScrollableFrame,
+    ) -> None:
+        empty = ctk.CTkFrame(
+            parent,
+            height=BUTTON_HEIGHT,
+            corner_radius=CARD_RADIUS,
+            border_width=BORDER_WIDTH,
+            border_color=BORDER,
+            fg_color=SURFACE_ALT,
+        )
+        empty.grid_propagate(False)
+        empty.grid_columnconfigure(0, weight=1)
+        self._search_empty_state = empty
+        ctk.CTkLabel(
+            empty,
+            text="검색 결과가 없습니다",
+            font=font(11, "bold"),
+            text_color=TEXT,
+        ).grid(row=0, column=0, pady=(7, 1))
+        button = ctk.CTkButton(
+            empty,
+            text="설정에서 추가",
+            width=92,
+            height=26,
+            corner_radius=8,
+            fg_color=ACCENT_SOFT,
+            hover_color=SURFACE_HOVER,
+            text_color=ACCENT,
+            font=font(9, "bold"),
+            command=self._open_settings,
+        )
+        button.grid(row=1, column=0, pady=(0, 7))
+        self._enable_keyboard_button(button)
+        self._search_empty_button = button
+
+    def _on_search_changed(self, *_trace_arguments: str) -> None:
+        variable = self._search_variable
+        if variable is not None:
+            self._apply_search_filter(variable.get())
+
+    def _apply_search_filter(self, query: str) -> None:
+        search_index = self._search_index
+        if search_index is None or self._items_frame is None:
+            return
+
+        matches = search_index.search(query)
+        self._visible_cards = [
+            card
+            for item in matches
+            if (card := self._card_by_item_id.get(item.id)) is not None
+        ]
+        self._showing_search_empty = bool(query.split()) and not self._visible_cards and bool(
+            self._cards
+        )
+        self._layout_rows = max(
+            1,
+            math.ceil(len(self._visible_cards) / max(1, self._layout_columns)),
+        )
+        self._regrid_cards()
+
+        canvas = self._items_frame._parent_canvas
+        canvas.yview_moveto(0.0)
+        content_height = (
+            BUTTON_HEIGHT
+            if self._showing_search_empty or self._empty_state is not None
+            else self._layout_rows * BUTTON_HEIGHT
+            + max(0, self._layout_rows - 1) * GAP
+        )
+        scrolling = content_height > self._layout_viewport_height
+        self._set_scrolling(scrolling)
+        widget_scaling = round(float(self._items_frame._get_widget_scaling()), 4)
+        self._layout_signature = (
+            self._layout_columns,
+            self._layout_viewport_height,
+            scrolling,
+            widget_scaling,
+        )
+        if self._count_badge is not None:
+            self._count_badge.configure(text=f"{len(self._visible_cards)}개")
+
+    def _reset_search_for_show(self) -> None:
+        variable = self._search_variable
+        if variable is None:
+            return
+        if variable.get():
+            variable.set("")
+        elif self._visible_cards != self._cards or self._showing_search_empty:
+            self._apply_search_filter("")
+
+    def _focus_search(
+        self,
+        _event: tk.Event[tk.Misc] | None = None,
+    ) -> str:
+        entry = self._search_entry
+        if entry is not None:
+            try:
+                entry._entry.focus_set()
+                entry._entry.icursor("end")
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _focus_search_result(self, direction: int) -> str:
+        if not self._visible_cards:
+            return "break"
+        return self._focus_card(0 if direction >= 0 else len(self._visible_cards) - 1)
+
+    def _activate_first_search_result(
+        self,
+        _event: tk.Event[tk.Misc] | None = None,
+    ) -> str:
+        if self._visible_cards:
+            self._visible_cards[0]._invoke()
+        return "break"
+
+    def _on_escape(self, _event: tk.Event[tk.Misc] | None = None) -> str:
+        variable = self._search_variable
+        if variable is not None and variable.get():
+            variable.set("")
+            self._focus_search()
+        else:
+            self.hide()
+        return "break"
+
     def _add_item_button(
         self,
         parent: ctk.CTkFrame | ctk.CTkScrollableFrame,
@@ -1065,35 +1640,44 @@ class PopupPanel(ctk.CTkToplevel):
             ),
             icon=icon,
         )
-        card.bind("<Up>", lambda _event, value=index: self._navigate(value, "up"), add="+")
+        card.bind(
+            "<Up>",
+            lambda _event, value=card: self._navigate_from_card(value, "up"),
+            add="+",
+        )
         card.bind(
             "<Down>",
-            lambda _event, value=index: self._navigate(value, "down"),
+            lambda _event, value=card: self._navigate_from_card(value, "down"),
             add="+",
         )
         card.bind(
             "<Left>",
-            lambda _event, value=index: self._navigate(value, "left"),
+            lambda _event, value=card: self._navigate_from_card(value, "left"),
             add="+",
         )
         card.bind(
             "<Right>",
-            lambda _event, value=index: self._navigate(value, "right"),
+            lambda _event, value=card: self._navigate_from_card(value, "right"),
             add="+",
         )
         card.bind("<Home>", lambda _event: self._focus_card(0), add="+")
-        card.bind("<End>", lambda _event: self._focus_card(len(self._cards) - 1), add="+")
+        card.bind(
+            "<End>",
+            lambda _event: self._focus_card(len(self._visible_cards) - 1),
+            add="+",
+        )
         card.bind(
             "<Prior>",
-            lambda _event, value=index: self._page_navigate(value, -1),
+            lambda _event, value=card: self._page_navigate_from_card(value, -1),
             add="+",
         )
         card.bind(
             "<Next>",
-            lambda _event, value=index: self._page_navigate(value, 1),
+            lambda _event, value=card: self._page_navigate_from_card(value, 1),
             add="+",
         )
         self._cards.append(card)
+        self._card_by_item_id[item.id] = card
 
     def _item_command(
         self,
@@ -1106,49 +1690,75 @@ class PopupPanel(ctk.CTkToplevel):
 
     def _navigate(self, index: int, direction: str) -> str:
         row, column = divmod(index, self._layout_columns)
-        target = grid_navigation_target(row, column, direction, self._layout_columns, len(self._cards))
-        if target is not None and 0 <= target < len(self._cards):
+        target = grid_navigation_target(
+            row,
+            column,
+            direction,
+            self._layout_columns,
+            len(self._visible_cards),
+        )
+        if target is not None and 0 <= target < len(self._visible_cards):
             self._focus_card(target)
+        elif direction == "up" and row == 0:
+            self._focus_search()
         return "break"
 
+    def _navigate_from_card(self, card: _LauncherCard, direction: str) -> str:
+        try:
+            index = self._visible_cards.index(card)
+        except ValueError:
+            return "break"
+        return self._navigate(index, direction)
+
+    def _page_navigate_from_card(
+        self,
+        card: _LauncherCard,
+        direction: int,
+    ) -> str:
+        try:
+            index = self._visible_cards.index(card)
+        except ValueError:
+            return "break"
+        return self._page_navigate(index, direction)
+
     def _page_navigate(self, index: int, direction: int) -> str:
-        if not self._cards:
+        if not self._visible_cards:
             return "break"
         row, column = divmod(index, self._layout_columns)
         viewport_height = (
             self._scroll_canvas.winfo_height()
             if self._scroll_canvas is not None
-            else self._cards[0].winfo_height()
+            else self._visible_cards[0].winfo_height()
         )
-        if len(self._cards) > self._layout_columns:
+        if len(self._visible_cards) > self._layout_columns:
             row_pitch = max(
                 1,
-                self._cards[self._layout_columns].winfo_y()
-                - self._cards[0].winfo_y(),
+                self._visible_cards[self._layout_columns].winfo_y()
+                - self._visible_cards[0].winfo_y(),
             )
         else:
-            row_pitch = max(1, self._cards[0].winfo_height())
+            row_pitch = max(1, self._visible_cards[0].winfo_height())
         rows_per_page = max(1, viewport_height // row_pitch)
         last_row = max(0, self._layout_rows - 1)
         target_row = max(0, min(last_row, row + direction * rows_per_page))
         target = min(
             target_row * self._layout_columns + column,
-            len(self._cards) - 1,
+            len(self._visible_cards) - 1,
         )
         return self._focus_card(target)
 
     def _focus_card(self, index: int) -> str:
-        if 0 <= index < len(self._cards):
-            self._cards[index].focus_set()
+        if 0 <= index < len(self._visible_cards):
+            self._visible_cards[index].focus_set()
             self.after_idle(lambda value=index: self._scroll_card_into_view(value))
         return "break"
 
     def _scroll_card_into_view(self, index: int) -> None:
         canvas = self._scroll_canvas
-        if canvas is None or not 0 <= index < len(self._cards):
+        if canvas is None or not 0 <= index < len(self._visible_cards):
             return
         try:
-            card = self._cards[index]
+            card = self._visible_cards[index]
             canvas.update_idletasks()
             bounds = canvas.bbox("all")
             if bounds is None:
@@ -1208,9 +1818,33 @@ class PopupPanel(ctk.CTkToplevel):
         self._actions.open_settings()
 
     def _on_focus_out(self, _event: tk.Event[tk.Misc]) -> None:
-        if not self._arming_focus:
-            generation = self._show_generation
-            self.after_idle(lambda: self._hide_if_focus_left(generation))
+        if self._visible:
+            self._schedule_focus_loss_check(self._show_generation)
+
+    def _schedule_focus_loss_check(self, show_generation: int) -> None:
+        self._cancel_focus_loss_check()
+        self._focus_loss_after = self.after(
+            _FOCUS_LOSS_SETTLE_MS,
+            lambda: self._run_focus_loss_check(show_generation),
+        )
+
+    def _run_focus_loss_check(self, show_generation: int) -> None:
+        self._focus_loss_after = None
+        if show_generation != self._show_generation or not self._visible:
+            return
+        if self._focus_arming_generation == show_generation:
+            self._schedule_focus_loss_check(show_generation)
+            return
+        self._hide_if_focus_left(show_generation)
+
+    def _cancel_focus_loss_check(self) -> None:
+        after_id, self._focus_loss_after = self._focus_loss_after, None
+        if after_id is None:
+            return
+        try:
+            self.after_cancel(after_id)
+        except tk.TclError:
+            pass
 
     def _hide_if_focus_left(self, show_generation: int | None = None) -> None:
         if (
@@ -1232,16 +1866,31 @@ class PopupPanel(ctk.CTkToplevel):
     def hide(self) -> None:
         if self._visible:
             self._show_generation += 1
-            self._arming_focus = False
-            self.withdraw()
+            self._cancel_focus_arming()
+            self._focus_arming_generation = None
+            self._cancel_focus_loss_check()
             self._visible = False
+            if self._warm_mapped and self._set_native_cloak(True):
+                return
+            self._warm_mapped = False
+            self._native_cloak_available = False
+            self.withdraw()
 
     def destroy(self) -> None:
         if self.winfo_exists():
+            self._cancel_focus_arming()
+            self._cancel_focus_loss_check()
+            if self._warm_mapped:
+                self._set_native_cloak(True)
             self._clear()
         super().destroy()
 
     def _clear(self) -> None:
+        if self._search_variable is not None and self._search_trace_id is not None:
+            try:
+                self._search_variable.trace_remove("write", self._search_trace_id)
+            except tk.TclError:
+                pass
         items_frame = self._items_frame
         if items_frame is not None:
             try:
@@ -1254,8 +1903,18 @@ class PopupPanel(ctk.CTkToplevel):
         self._layout_signature = None
         self._layout_columns = 1
         self._layout_rows = 1
+        self._layout_viewport_height = BUTTON_HEIGHT
         self._scrolling = False
         self._cards = []
+        self._card_by_item_id = {}
+        self._visible_cards = []
+        self._search_index = None
+        self._search_variable = None
+        self._search_trace_id = None
+        self._search_entry = None
+        self._search_empty_state = None
+        self._search_empty_button = None
+        self._showing_search_empty = False
         self._items_frame = None
         self._scroll_canvas = None
         self._empty_state = None

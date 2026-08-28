@@ -16,6 +16,7 @@ from time import perf_counter, sleep
 from typing import Any, Callable
 
 import customtkinter as ctk
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,11 +33,11 @@ from quickaccess.app import PUMP_INTERVAL_MS, QuickAccessApp  # noqa: E402
 from quickaccess.commands import CommandBus, CommandSource, OpenPanelCommand  # noqa: E402
 from quickaccess.models import LauncherConfig, LauncherItem  # noqa: E402
 from quickaccess.platform import enable_dpi_awareness  # noqa: E402
-from quickaccess.services.monitor import Point, Rect  # noqa: E402
+from quickaccess.services.monitor import MonitorContext, Point, Rect  # noqa: E402
 from quickaccess.ui.popup import PopupActions, PopupPanel  # noqa: E402
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BENCHMARK_NAME = "quickaccess-popup-warm-path"
 DEFAULT_ITEMS = 20
 DEFAULT_COLUMNS = 3
@@ -62,15 +63,24 @@ class _NoRescheduleRoot:
 
 
 class _FixedMonitor:
-    def __init__(self, anchor: Point, work_area: Rect) -> None:
+    def __init__(self, anchor: Point, work_area: Rect, scale: float) -> None:
         self._anchor = anchor
         self._work_area = work_area
+        self._scale = scale
 
     def get_cursor_position(self) -> Point:
         return self._anchor
 
     def get_monitor_work_area(self, _anchor: Point) -> Rect:
         return self._work_area
+
+    def get_monitor_context(self, _anchor: Point) -> MonitorContext:
+        return MonitorContext(
+            identifier="benchmark-display",
+            bounds=self._work_area,
+            work_area=self._work_area,
+            scale=self._scale,
+        )
 
 
 class _NoopToast:
@@ -89,18 +99,20 @@ class _CommandPumpHarness:
         config: LauncherConfig,
         anchor: Point,
         work_area: Rect,
+        dpi_scale: float,
     ) -> None:
         self.root = _NoRescheduleRoot(root)
         self.popup = popup
         self.config = config
         self.statuses: dict[str, object] = {}
         self.icon_images: dict[str, ctk.CTkImage] = {}
-        self.monitor = _FixedMonitor(anchor, work_area)
+        self.monitor = _FixedMonitor(anchor, work_area, dpi_scale)
         self.toast = _NoopToast()
         self.bus = CommandBus()
         self._stopping = False
         self._last_anchor: Point | None = None
         self._last_work_area: Rect | None = None
+        self._last_monitor_context = None
 
     def _handle_command(self, command: object) -> None:
         QuickAccessApp._handle_command(self, command)  # type: ignore[arg-type]
@@ -108,11 +120,23 @@ class _CommandPumpHarness:
     def _drain_commands(self) -> None:
         QuickAccessApp._drain_commands(self)  # type: ignore[arg-type]
 
+    @staticmethod
+    def _drain_instance_requests() -> None:
+        return None
+
     def open_panel(self, cursor_position: tuple[int, int] | None = None) -> None:
         QuickAccessApp.open_panel(self, cursor_position)  # type: ignore[arg-type]
 
-    def _ensure_popup(self) -> PopupPanel:
+    def _monitor_context_at(self, anchor: Point):
+        return QuickAccessApp._monitor_context_at(self, anchor)  # type: ignore[arg-type]
+
+    def _ensure_popup(self, _monitor_context: object | None = None) -> PopupPanel:
         return self.popup
+
+    @staticmethod
+    def _schedule_icon_requests() -> None:
+        # Icon extraction is intentionally outside this UI latency benchmark.
+        return None
 
 
 def sample_config(
@@ -169,8 +193,15 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
         construct_ms = elapsed_ms(construct_popup)
         assert popup is not None
+        dpi_scale = float(ScalingTracker.get_window_dpi_scaling(popup))
         prepare_ms = elapsed_ms(
-            lambda: popup.prepare(config, {}, work_area, icons={})
+            lambda: popup.prepare(
+                config,
+                {},
+                work_area,
+                icons={},
+                target_dpi_scale=dpi_scale,
+            )
         )
         # Resolve geometry and widget creation outside the measured warm path.
         root.update_idletasks()
@@ -183,7 +214,14 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
         def show_cycle() -> tuple[float, float]:
             started = perf_counter()
-            popup.show(config, {}, anchor, work_area, icons={})
+            popup.show(
+                config,
+                {},
+                anchor,
+                work_area,
+                icons={},
+                target_dpi_scale=dpi_scale,
+            )
             call_ms = (perf_counter() - started) * 1000.0
             root.update_idletasks()
             idle_complete_ms = (perf_counter() - started) * 1000.0
@@ -213,28 +251,35 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         call_summary = summarize_ms(call_samples)
         idle_complete_summary = summarize_ms(idle_complete_samples)
 
-        pump_harness = _CommandPumpHarness(root, popup, config, anchor, work_area)
+        pump_harness = _CommandPumpHarness(
+            root,
+            popup,
+            config,
+            anchor,
+            work_area,
+            dpi_scale,
+        )
         active_started: float | None = None
-        mapped_at: float | None = None
+        visible_at: float | None = None
 
-        # Drain any Map/Unmap notifications left by the direct warm-path
-        # samples before associating events with command-pump iterations.
+        # Drain notifications left by the direct warm-path samples before
+        # associating visibility signals with command-pump iterations.
         popup.hide()
         root.update()
 
-        def record_map(_event: object) -> None:
-            nonlocal mapped_at
-            if active_started is not None and mapped_at is None:
-                mapped_at = perf_counter()
+        def record_visible(_event: object) -> None:
+            nonlocal visible_at
+            if active_started is not None and visible_at is None:
+                visible_at = perf_counter()
 
-        popup.bind("<Map>", record_map, add="+")
+        popup.bind("<<QuickAccessVisible>>", record_visible, add="+")
 
-        def command_to_map_cycle() -> float:
-            nonlocal active_started, mapped_at
+        def command_to_visible_cycle() -> float:
+            nonlocal active_started, visible_at
             if popup.visible:
                 popup.hide()
             root.update()
-            mapped_at = None
+            visible_at = None
             active_started = perf_counter()
             pump_harness.bus.publish(
                 OpenPanelCommand(
@@ -247,32 +292,31 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 pump_harness._drain_commands,
             )
             deadline = active_started + args.e2e_timeout
-            while mapped_at is None and perf_counter() < deadline:
+            while visible_at is None and perf_counter() < deadline:
                 root.update()
-                if mapped_at is None:
+                if visible_at is None:
                     sleep(0.0005)
-            if mapped_at is None:
+            if visible_at is None:
                 active_started = None
                 popup.hide()
                 raise TimeoutError(
-                    "OpenPanelCommand did not produce a popup <Map> event "
+                    "OpenPanelCommand did not expose the popup "
                     f"within {args.e2e_timeout:.1f}s"
                 )
-            elapsed = (mapped_at - active_started) * 1000.0
+            elapsed = (visible_at - active_started) * 1000.0
             active_started = None
             root.update_idletasks()
             popup.hide()
-            # Process the matching Unmap before the next sample so it cannot
-            # be mistaken for a later iteration's Map transition.
+            # Process the matching cloak before the next sample.
             root.update()
             return elapsed
 
         for _ in range(args.e2e_warmups):
-            command_to_map_cycle()
-        command_to_map_samples = [
-            command_to_map_cycle() for _ in range(args.e2e_iterations)
+            command_to_visible_cycle()
+        command_to_visible_samples = [
+            command_to_visible_cycle() for _ in range(args.e2e_iterations)
         ]
-        command_to_map_summary = summarize_ms(command_to_map_samples)
+        command_to_visible_summary = summarize_ms(command_to_visible_samples)
         return {
             "schema_version": SCHEMA_VERSION,
             "benchmark": BENCHMARK_NAME,
@@ -292,11 +336,12 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     work_area.right,
                     work_area.bottom,
                 ],
+                "dpi_scale": round(dpi_scale, 4),
                 "warmups": args.warmups,
                 "iterations": args.iterations,
                 "e2e_warmups": args.e2e_warmups,
                 "e2e_iterations": args.e2e_iterations,
-                "e2e_event": "<Map>",
+                "e2e_event": "<<QuickAccessVisible>>",
                 "command_pump_interval_ms": PUMP_INTERVAL_MS,
             },
             "observations": {
@@ -308,14 +353,15 @@ def _run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "warm_dynamic_updates": (
                     popup.dynamic_update_count - prepared_dynamic_update_count
                 ),
+                "warm_mapping_enabled": popup.warm_mapping_enabled,
             },
             "metrics": {
                 "popup_warm_show_call_ms": _summary_dict(call_summary),
                 "popup_warm_idle_complete_ms": _summary_dict(
                     idle_complete_summary
                 ),
-                "open_panel_command_to_map_ms": _summary_dict(
-                    command_to_map_summary
+                "open_panel_command_to_visible_ms": _summary_dict(
+                    command_to_visible_summary
                 ),
             },
         }

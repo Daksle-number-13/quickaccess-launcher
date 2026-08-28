@@ -23,6 +23,18 @@ $executablePath = (Resolve-Path -LiteralPath $Executable).Path
 if ([IO.Path]::GetExtension($executablePath) -ne '.exe') {
     throw "Authenticode target must be an EXE: $executablePath"
 }
+$manifestPath = Join-Path (Split-Path -Parent $executablePath) 'QuickAccess.release.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Release manifest is missing. Build with build.ps1 before signing: $manifestPath"
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$unsignedHash = Get-FileHash -LiteralPath $executablePath -Algorithm SHA256
+if (
+    $manifest.artifact.name -ne [IO.Path]::GetFileName($executablePath) -or
+    $manifest.artifact.sha256 -ne $unsignedHash.Hash
+) {
+    throw 'Release manifest does not match the executable being signed.'
+}
 
 $certificate = $null
 $certificateStore = $null
@@ -93,8 +105,22 @@ if ($null -eq $signature.TimeStamperCertificate) {
 }
 
 $hash = Get-FileHash -LiteralPath $executablePath -Algorithm SHA256
+$manifest.artifact.size = (Get-Item -LiteralPath $executablePath).Length
+$manifest.artifact.sha256 = $hash.Hash
+$manifest.authenticode.status = $signature.Status.ToString()
+$manifest.authenticode.signed = $true
+$manifestJson = $manifest | ConvertTo-Json -Depth 8
+$manifestTemp = "$manifestPath.tmp"
+[IO.File]::WriteAllText(
+    $manifestTemp,
+    $manifestJson + [Environment]::NewLine,
+    [Text.UTF8Encoding]::new($false)
+)
+Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
+
 [pscustomobject]@{
     Executable = $executablePath
+    Manifest = $manifestPath
     Subject = $signature.SignerCertificate.Subject
     Thumbprint = $signature.SignerCertificate.Thumbprint
     TimestampSubject = $signature.TimeStamperCertificate.Subject
