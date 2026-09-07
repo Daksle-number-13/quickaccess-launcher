@@ -13,7 +13,9 @@ from quickaccess.services.monitor import (
 )
 from quickaccess.services.singleton import SingleInstanceGuard, local_mutex_name
 from quickaccess.services.startup import (
+    MAX_RUN_COMMAND_LENGTH,
     RUN_KEY,
+    StartupCommandTooLongError,
     StartupManager,
     StartupRegistrationState,
     build_startup_command,
@@ -227,6 +229,48 @@ class StartupTests(unittest.TestCase):
             command,
             '"C:\\Program Files\\QuickAccess\\QuickAccess.exe" --label "품질 팀"',
         )
+
+    def test_run_command_accepts_260_char_boundary_and_rejects_longer(self) -> None:
+        at_limit = "C:\\" + ("x" * 247)
+        too_long = at_limit + "x"
+
+        command = build_startup_command(at_limit, ("--startup",))
+
+        self.assertEqual(MAX_RUN_COMMAND_LENGTH, len(command))
+        with self.assertRaises(StartupCommandTooLongError) as raised:
+            build_startup_command(too_long, ("--startup",))
+        self.assertEqual(MAX_RUN_COMMAND_LENGTH + 1, raised.exception.actual_length)
+        self.assertIn("더 짧은 폴더 경로", str(raised.exception))
+
+        with self.assertRaises(StartupCommandTooLongError):
+            build_startup_command("C:\\" + ("😀" * 125), ("--startup",))
+
+    def test_inspect_and_reconcile_reject_too_long_enabled_command(self) -> None:
+        registry = _FakeRegistry()
+        manager = StartupManager("QuickAccessTest", registry=registry)
+        too_long = "C:\\" + ("x" * 248)
+
+        inspected = manager.inspect(True, too_long, ("--startup",))
+
+        self.assertEqual(StartupRegistrationState.UNREADABLE, inspected.state)
+        self.assertFalse(inspected.in_sync)
+        self.assertIn("260자", inspected.error or "")
+        with self.assertRaises(StartupCommandTooLongError):
+            manager.reconcile(True, too_long, ("--startup",))
+        self.assertEqual(0, registry.write_count)
+
+    def test_reconcile_can_remove_owned_value_from_too_long_location(self) -> None:
+        registry = _FakeRegistry()
+        registry.key_exists = True
+        registry.values["QuickAccessTest"] = r'"C:\Old\QuickAccess.exe" --startup'
+        manager = StartupManager("QuickAccessTest", registry=registry)
+        too_long = "C:\\" + ("x" * 248)
+
+        result = manager.reconcile(False, too_long, ("--startup",))
+
+        self.assertEqual(StartupRegistrationState.ABSENT, result.state)
+        self.assertTrue(result.in_sync)
+        self.assertEqual(1, registry.delete_count)
 
     def test_manager_only_mutates_its_own_run_value(self) -> None:
         registry = _FakeRegistry()

@@ -9,6 +9,12 @@
 `QuickAccess.exe`를 다운로드하면 별도의 Python 설치 없이 바로 실행할 수
 있습니다. Windows 10/11 x64를 지원합니다.
 
+현재 공개판은 **v2.0.2 (2026-09-07)**입니다. 최신 버전 페이지에서
+`QuickAccess.exe`, 무결성 manifest와 제3자 라이선스 묶음을 함께 받을 수 있습니다.
+
+- [v2.0.2 QuickAccess.exe 바로 받기](https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v2.0.2/QuickAccess.exe)
+- [v2.0.2 Release 및 변경 내용](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v2.0.2)
+
 처음 사용하는 분은 실제 화면이 포함된
 [QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
 따라 하면 됩니다.
@@ -48,6 +54,13 @@ Get-FileHash .\QuickAccess.exe -Algorithm SHA256
 표시됩니다. 정상 경로는 한 번의 클릭으로 열고, 찾을 수 없는 경로는 같은
 카드에서 바로 재지정할 수 있습니다.
 
+v2.0.2는 단축키를 누른 시점의 좌표를 저장하지 않고, 패널을 **실제로 표시하기
+직전의 현재 커서 위치**를 사용합니다. 빠르게 다른 모니터로 커서를 옮겨도 최신
+위치를 기준으로 표시하며 화면 가장자리에서는 작업 영역 안쪽으로 보정합니다.
+v2.0.2를 실제 100%·200%·100% 혼합 DPI 3모니터에서 측정한 결과,
+명령→창 노출 p95 12.7ms, 36/36회 표시 성공과 재렌더 0회를 기록했습니다. 조건과 한계는
+[성능 측정 문서](docs/PERFORMANCE.md)를 참고하세요.
+
 ![QuickAccess 빠른 실행 패널](docs/screenshots/quickaccess-popup-light.png)
 
 환경 설정에서는 파일·폴더뿐 아니라 인터넷 링크도 추가할 수 있으며, 화면 스타일,
@@ -69,15 +82,15 @@ Get-FileHash .\QuickAccess.exe -Algorithm SHA256
 - 패널에서 이름·경로·웹사이트 주소·한글 초성으로 즉시 검색하고, 방향키·
   `Home`·`End`·`Page Up/Down`·`Enter`만으로 실행
 - 패널에서 우클릭으로 경로를 클립보드에 복사
-- 등록한 파일의 실제 확장자 아이콘을 백그라운드에서 불러와 표시(불러오기 전이나
-  실패 시에는 기존 폴더/파일 기본 아이콘을 그대로 사용, 첫 표시 속도에 영향 없음)
-- 누락 경로는 회색 `!`로 표시해 재지정하고, 응답 지연 경로는 사용자가 직접
+- 등록한 파일의 실제 확장자 아이콘을 백그라운드에서 불러와 표시(셸 아이콘 추출은
+  핫키 표시 경로와 분리하며, 준비 전이나 실패 시 기본 아이콘을 그대로 사용)
+- 누락 경로는 경고색 `!` 카드로 표시해 재지정하고, 응답 지연 경로는 사용자가 직접
   열기를 시도할 수 있도록 구분
 - 시스템 트레이 메뉴: `패널 열기`, `설정`, `종료`
 - 사용자별 자동 실행 상태 확인·이전 EXE 경로 자동 복구, 한글 경로 및 UTF-8 JSON 지원
 - 두 번 실행하면 새 프로세스를 남기지 않고 기존 앱의 패널 또는 설정창을 표시
 - Windows 11 계열 카드 UI, 저장되는 밝기 모드, 혼합 DPI 모니터 대응
-- 설정에서 새 버전 자동 확인을 켜면 GitHub 릴리스를 확인해 트레이 알림으로 안내
+- 설정에서 새 버전 자동 확인을 켜면 GitHub 릴리스를 확인해 앱 알림으로 안내
   (기본값은 꺼짐, 같은 버전은 한 번만 표시)
 - 환경 설정을 `바로가기 / 단축키·시작 / 화면·패널 / 앱 정보`로 분리하고,
   설정 가져오기·내보내기와 개인정보를 제외한 진단 정보 복사 제공
@@ -106,7 +119,8 @@ python main.py
 
 명세에 맞춰 부팅 시 자동 실행 기본값은 켜져 있습니다. 원하지 않으면 트레이
 아이콘을 우클릭하고 `설정`에서 끌 수 있습니다. 회사 정책이 레지스트리 등록을
-막으면 앱은 설정을 자동으로 끈 상태로 되돌리고 알림을 표시합니다.
+막아 사용자가 자동 실행을 변경하지 못하면 이전 상태로 되돌리고 알림을 표시합니다.
+앱 시작 중 기존 등록 경로 복구가 차단된 경우에는 저장된 선호값을 유지하고 경고합니다.
 
 ## 사용법
 
@@ -127,6 +141,11 @@ JSON도 변경되지 않습니다.
 환경 설정의 `화면 스타일`에서 Windows 설정을 따르는 `시스템`, 항상 밝은
 `밝게`, 항상 어두운 `어둡게` 중 하나를 선택할 수 있습니다. 선택값은 즉시
 적용되고 다음 실행에도 유지됩니다.
+
+새 버전으로 교체할 때는 구버전을 트레이 메뉴에서 완전히 종료한 뒤, 새 EXE를
+최종 보관 위치에 두고 한 번 실행하세요. 구버전이 살아 있는 동안 새 EXE를 실행하면
+단일 인스턴스 보호에 따라 기존 버전의 패널만 열립니다. 구버전을 종료하고 새 버전을
+실행하면 자동 실행이 켜진 경우 다음 부팅 경로도 새 EXE 위치로 복구됩니다.
 
 ## 테스트
 
@@ -155,15 +174,34 @@ Windows Shell/GDI API를 직접 사용합니다. 자동 테스트는 캐싱·중
 아이콘이 카드에 정확히 표시되는지는 배포 전 실제 PC에서 반드시 육안으로
 확인하세요.
 
+## 소개 문서와 매뉴얼 갱신
+
+문서용 화면은 샘플 데이터를 넣은 실제 UI 클래스를 실행해 캡처합니다. 화면과 PDF를
+다시 만들려면 개발 의존성을 설치한 Windows 데스크톱에서 다음 순서로 실행합니다.
+
+```powershell
+python devtools\preview_ui.py popup docs\screenshots\quickaccess-popup-light.png --appearance light
+python devtools\preview_ui.py settings docs\screenshots\quickaccess-settings-light.png --appearance light --page items
+python devtools\preview_ui.py settings docs\screenshots\quickaccess-settings-shortcuts-light.png --appearance light --page shortcuts
+python devtools\preview_ui.py settings docs\screenshots\quickaccess-settings-about-light.png --appearance light --page about
+python devtools\build_user_manual.py
+```
+
+최종 PDF는 `output\pdf\QuickAccess_Easy_Manual_KO.pdf`에 생성됩니다. 배포 전에는
+Poppler의 `pdftoppm` 등으로 모든 페이지를 PNG로 렌더링해 글자 잘림, 겹침과 이미지
+비율을 확인하세요. 소개 HTML은 `docs\quickaccess-introduction.html`을 로컬
+브라우저에서 열어 네 화면 이미지, 내부 링크와 두 자동 재생 예시를 점검합니다.
+
 ## 단일 EXE 빌드
 
 ```powershell
-.\build.ps1 -Clean -PythonExecutable C:\path\to\python.exe
+.\build.ps1 -Clean -SmokeTest -PythonExecutable C:\path\to\python.exe
 ```
 
-산출물은 `dist\QuickAccess.exe`입니다. `quickaccess.spec`는 CustomTkinter의
-테마·폰트와 pystray/pywin32 동적 모듈을 명시적으로 수집하고, UPX를 사용하지
-않는 one-file/windowed 빌드입니다.
+실행 파일은 `dist\QuickAccess.exe`이며, 같은 폴더에 검증용 release manifest와
+제3자 라이선스 ZIP도 생성됩니다. `quickaccess.spec`는 CustomTkinter의 테마·폰트와
+pystray/pywin32 동적 모듈을 명시적으로 수집하고, UPX를 사용하지 않는
+one-file/windowed 빌드입니다.
 
 재현 가능한 x64 산출물을 위해 릴리스 빌드는 Windows x64 Python 3.13.15를
 정확히 요구합니다. 일반 소스 실행의 최소 버전은 Python 3.11이지만, 다른 버전이나
@@ -192,8 +230,9 @@ Authenticode 서명과 RFC 3161 타임스탬프를 적용합니다.
 ```
 
 스크립트는 Code Signing EKU, 개인 키, 유효기간, 서명 상태와 타임스탬프를 모두
-검증합니다. 서명하면 파일 해시가 바뀌므로 서명된 동일 파일로 스모크 테스트와
-SHA-256 기록을 다시 수행해야 합니다.
+검증하고, 서명 후 바뀐 크기·SHA-256·`Valid` 상태를 manifest에 갱신합니다.
+사용자는 서명된 동일 파일로 스모크 테스트를 다시 실행하고, 갱신된 SHA-256을
+Release 설명에 기록해야 합니다.
 
 ## 실제 환경 릴리스 체크리스트
 

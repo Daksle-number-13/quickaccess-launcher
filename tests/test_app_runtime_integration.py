@@ -181,7 +181,7 @@ class AppRuntimeIntegrationTests(unittest.TestCase):
         guard.notify_existing.assert_called_once_with(InstanceRequest.OPEN_SETTINGS)
         guard.close.assert_called_once_with()
 
-    def test_smoke_instance_keeps_its_separate_signal_namespace(self) -> None:
+    def test_overlapping_smoke_instance_fails_instead_of_false_success(self) -> None:
         guard = MagicMock()
         guard.acquire.return_value = False
         guard_type = MagicMock(return_value=guard)
@@ -196,9 +196,140 @@ class AppRuntimeIntegrationTests(unittest.TestCase):
         ):
             result = main(["--smoke-test"])
 
-        self.assertEqual(0, result)
+        self.assertEqual(1, result)
         guard_type.assert_called_once_with(f"{MUTEX_NAME}-Smoke")
-        guard.notify_existing.assert_called_once_with(InstanceRequest.SHOW_PANEL)
+        guard.notify_existing.assert_not_called()
+
+    def test_smoke_failure_never_opens_an_interactive_error_dialog(self) -> None:
+        guard = MagicMock()
+        guard.acquire.return_value = True
+        hooks = MagicMock()
+
+        with (
+            patch("quickaccess.app.SingleInstanceGuard", return_value=guard),
+            patch("quickaccess.app.configure_logging"),
+            patch("quickaccess.app.install_exception_hooks", return_value=hooks),
+            patch("quickaccess.app.close_logging"),
+            patch("quickaccess.app.require_windows"),
+            patch(
+                "quickaccess.app.tempfile.TemporaryDirectory",
+                side_effect=PermissionError("smoke directory denied"),
+            ),
+            patch("quickaccess.app._show_fatal_error") as show_fatal_error,
+        ):
+            result = main(["--smoke-test"])
+
+        self.assertEqual(1, result)
+        show_fatal_error.assert_not_called()
+        guard.close.assert_called_once_with()
+        hooks.restore.assert_called_once_with()
+
+    def test_smoke_logging_initialization_failure_is_noninteractive(self) -> None:
+        with (
+            patch(
+                "quickaccess.app.configure_logging",
+                side_effect=PermissionError("log directory denied"),
+            ),
+            patch("quickaccess.app.install_exception_hooks") as install_hooks,
+            patch("quickaccess.app.SingleInstanceGuard") as guard_type,
+            patch("quickaccess.app.close_logging") as close_logging,
+            patch("quickaccess.app.LOGGER.exception"),
+            patch("quickaccess.app._show_fatal_error") as show_fatal_error,
+        ):
+            result = main(["--smoke-test"])
+
+        self.assertEqual(1, result)
+        show_fatal_error.assert_not_called()
+        install_hooks.assert_not_called()
+        guard_type.assert_not_called()
+        close_logging.assert_not_called()
+
+    def test_main_attempts_every_cleanup_when_individual_steps_fail(self) -> None:
+        guard = MagicMock()
+        guard.acquire.return_value = True
+        guard.close.side_effect = RuntimeError("guard cleanup failed")
+        hooks = MagicMock()
+        hooks.restore.side_effect = RuntimeError("hook cleanup failed")
+        smoke_directory = MagicMock()
+        smoke_directory.name = r"C:\QuickAccessSmoke-Test"
+        smoke_directory.cleanup.side_effect = RuntimeError("temp cleanup failed")
+        store = MagicMock()
+        store.load.return_value = SimpleNamespace(config=LauncherConfig.default())
+        root = MagicMock()
+        application = MagicMock()
+        root.mainloop.side_effect = lambda: root.after.call_args.args[1]()
+
+        with (
+            patch("quickaccess.app.SingleInstanceGuard", return_value=guard),
+            patch("quickaccess.app.configure_logging"),
+            patch("quickaccess.app.install_exception_hooks", return_value=hooks),
+            patch(
+                "quickaccess.app.close_logging",
+                side_effect=RuntimeError("logging cleanup failed"),
+            ) as close_logging,
+            patch("quickaccess.app.LOGGER.exception") as log_exception,
+            patch("quickaccess.app.require_windows"),
+            patch("quickaccess.app.enable_dpi_awareness"),
+            patch(
+                "quickaccess.app.tempfile.TemporaryDirectory",
+                return_value=smoke_directory,
+            ),
+            patch("quickaccess.app.ConfigStore", return_value=store),
+            patch("quickaccess.app.apply_appearance_mode"),
+            patch("quickaccess.app.ctk.set_default_color_theme"),
+            patch("quickaccess.app.ctk.CTk", return_value=root),
+            patch("quickaccess.app.QuickAccessApp", return_value=application),
+        ):
+            result = main(["--smoke-test"])
+
+        self.assertEqual(0, result)
+        guard.close.assert_called_once_with()
+        smoke_directory.cleanup.assert_called_once_with()
+        hooks.restore.assert_called_once_with()
+        close_logging.assert_called_once_with()
+        self.assertEqual(4, log_exception.call_count)
+
+    def test_smoke_gate_requires_normal_completion_without_callback_errors(self) -> None:
+        for scenario, expected in (("complete", 0), ("early_exit", 1), ("callback_error", 1)):
+            with self.subTest(scenario=scenario):
+                guard = MagicMock()
+                guard.acquire.return_value = True
+                store = MagicMock()
+                store.load.return_value = SimpleNamespace(config=LauncherConfig.default())
+                smoke_directory = MagicMock(name="smoke_directory")
+                smoke_directory.name = r"C:\QuickAccessSmoke-Test"
+                root = MagicMock()
+                application = MagicMock()
+
+                def run_loop():
+                    if scenario == "callback_error":
+                        error = RuntimeError("scheduled UI callback failed")
+                        root.report_callback_exception(type(error), error, None)
+                    if scenario != "early_exit":
+                        root.after.call_args.args[1]()
+
+                root.mainloop.side_effect = run_loop
+                with (
+                    patch("quickaccess.app.configure_logging"),
+                    patch("quickaccess.app.install_exception_hooks"),
+                    patch("quickaccess.app.close_logging"),
+                    patch("quickaccess.app.SingleInstanceGuard", return_value=guard),
+                    patch("quickaccess.app.require_windows"),
+                    patch("quickaccess.app.enable_dpi_awareness"),
+                    patch("quickaccess.app.tempfile.TemporaryDirectory", return_value=smoke_directory),
+                    patch("quickaccess.app.ConfigStore", return_value=store),
+                    patch("quickaccess.app.apply_appearance_mode"),
+                    patch("quickaccess.app.ctk.set_default_color_theme"),
+                    patch("quickaccess.app.ctk.CTk", return_value=root),
+                    patch("quickaccess.app.QuickAccessApp", return_value=application),
+                    patch("quickaccess.app._show_fatal_error") as show_fatal,
+                ):
+                    result = main(["--smoke-test"])
+
+                self.assertEqual(expected, result)
+                show_fatal.assert_not_called()
+                if scenario == "callback_error":
+                    root.quit.assert_called_once_with()
 
     def test_owner_guard_is_passed_to_app_and_settings_open_after_start(self) -> None:
         guard = MagicMock()
@@ -251,6 +382,32 @@ class AppRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(1, harness.panel_calls)
         self.assertEqual(1, harness.settings_calls)
         self.assertEqual(1, len(harness.root.scheduled))
+
+    def test_update_worker_failure_releases_generation_after_ui_dispatch(self) -> None:
+        app = QuickAccessApp.__new__(QuickAccessApp)
+        app.config = LauncherConfig.default()
+        app.config.check_updates = True
+        app._stopping = False
+        app._update_check_generation = 3
+        app._update_check_inflight_generations = set()
+        app.bus = CommandBus()
+
+        with (
+            patch("quickaccess.app.check_for_update", side_effect=RuntimeError("bad response")),
+            patch("quickaccess.app.threading.Thread") as thread,
+        ):
+            app._check_for_update()
+            thread.call_args.kwargs["target"]()
+
+        self.assertIn(3, app._update_check_inflight_generations)
+        for command in app.bus.drain_for_ui(10):
+            app._handle_command(command)
+        self.assertNotIn(3, app._update_check_inflight_generations)
+
+        with patch("quickaccess.app.threading.Thread") as thread:
+            thread.return_value.start.side_effect = RuntimeError("no thread available")
+            app._check_for_update()
+        self.assertNotIn(3, app._update_check_inflight_generations)
 
     def test_startup_change_rejects_unverified_post_state_and_keeps_config(self) -> None:
         startup = _ScriptedStartup(

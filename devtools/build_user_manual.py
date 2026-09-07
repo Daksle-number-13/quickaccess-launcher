@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -28,6 +29,14 @@ from PIL import Image as PILImage
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from quickaccess import __author__ as APP_AUTHOR  # noqa: E402
+from quickaccess import __version__ as APP_VERSION  # noqa: E402
+
+
+RELEASE_DATE = "2026-09-07"
 OUTPUT = ROOT / "output" / "pdf" / "QuickAccess_Easy_Manual_KO.pdf"
 POPUP_SCREENSHOT = ROOT / "docs" / "screenshots" / "quickaccess-popup-light.png"
 SETTINGS_SCREENSHOT = ROOT / "docs" / "screenshots" / "quickaccess-settings-light.png"
@@ -54,6 +63,7 @@ RED = colors.HexColor("#C62828")
 def register_fonts() -> None:
     pdfmetrics.registerFont(TTFont("Malgun", r"C:\Windows\Fonts\malgun.ttf"))
     pdfmetrics.registerFont(TTFont("MalgunBold", r"C:\Windows\Fonts\malgunbd.ttf"))
+    pdfmetrics.registerFont(TTFont("Consolas", r"C:\Windows\Fonts\consola.ttf"))
     pdfmetrics.registerFontFamily(
         "Malgun",
         normal="Malgun",
@@ -273,7 +283,7 @@ def draw_page(canvas, document) -> None:  # type: ignore[no-untyped-def]
         canvas.line(MARGIN_X, 12 * mm, PAGE_WIDTH - MARGIN_X, 12 * mm)
         canvas.setFont("Malgun", 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN_X, 7.5 * mm, "QuickAccess Easy Manual  |  v2.0.0")
+        canvas.drawString(MARGIN_X, 7.5 * mm, f"QuickAccess Easy Manual  |  v{APP_VERSION}")
         canvas.drawRightString(PAGE_WIDTH - MARGIN_X, 7.5 * mm, str(page))
     canvas.restoreState()
 
@@ -296,7 +306,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 4 * mm),
             note("5분이면 시작할 수 있어요", "설치 없이 실행하고, 원하는 항목을 등록한 뒤 Ctrl + Space만 누르면 됩니다.", tone="green"),
             Spacer(1, 9 * mm),
-            Paragraph("버전 2.0.0  |  Windows 10/11 x64  |  2026-08-28", SMALL),
+            Paragraph(f"버전 {APP_VERSION}  |  Windows 10/11 x64  |  {RELEASE_DATE}", SMALL),
             PageBreak(),
         ]
     )
@@ -305,13 +315,13 @@ def build_story() -> list[Flowable]:
     story.extend(page_header("1. 다운로드하고 처음 실행하기", "처음 한 번만 하면 됩니다"))
     story.extend(
         [
-            step(1, "GitHub에서 실행 파일 받기", "https://github.com/Daksle-number-13/quickaccess-launcher/releases 에서 최신 버전의 QuickAccess.exe를 다운로드합니다."),
+            step(1, "GitHub에서 실행 파일 받기", f"https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v{APP_VERSION} 에서 QuickAccess.exe를 다운로드합니다."),
             Spacer(1, 3 * mm),
             step(2, "QuickAccess.exe 실행", "설치 과정은 없습니다. 다운로드한 파일을 더블 클릭하면 시스템 트레이에 상주합니다."),
             Spacer(1, 3 * mm),
-            step(3, "패널 열기", "키보드에서 Ctrl + Space를 함께 누릅니다. 마우스 커서가 있는 화면에 패널이 나타납니다."),
+            step(3, "패널 열기", "키보드에서 Ctrl + Space를 함께 누릅니다. 패널을 실제로 표시하기 직전의 현재 마우스 커서가 있는 화면에 나타납니다."),
             Spacer(1, 6 * mm),
-            note("Windows에서 경고가 표시되나요?", "현재 공개 파일에는 Authenticode 코드 서명이 적용되지 않아 Windows가 '인식할 수 없는 앱' 경고를 표시할 수 있습니다. GitHub 공식 Release에서 받은 파일인지 확인하고 Release 안내의 SHA-256 값과 파일 해시를 비교한 뒤 '추가 정보' - '실행'을 선택하세요.", tone="amber"),
+            note("Windows에서 경고가 표시되나요?", f"현재 공개 v{APP_VERSION} 파일에는 Authenticode 코드 서명이 적용되지 않아 Windows가 '인식할 수 없는 앱' 경고를 표시할 수 있습니다. GitHub 공식 Release에서 받은 파일인지 확인하고 Release 안내의 SHA-256 값과 파일 해시를 비교한 뒤 '추가 정보' - '실행'을 선택하세요.", tone="amber"),
             Spacer(1, 5 * mm),
             Paragraph("기본으로 등록되는 항목", H2),
             Paragraph("- 다운로드 폴더<br/>- 문서 폴더", BODY),
@@ -330,8 +340,10 @@ def build_story() -> list[Flowable]:
             step(2, "검색하고 키보드로 선택", "검색창에 이름, 경로, 웹사이트 주소 또는 한글 초성을 입력하세요. 방향키와 Home, End, Page Up/Down으로 이동하고 Enter 또는 Space를 누르면 열립니다."),
             Spacer(1, 2.5 * mm),
             step(3, "설정 열기", "패널 오른쪽 위의 톱니바퀴 아이콘을 누르면 항목을 추가하거나 순서를 바꿀 수 있습니다."),
-            Spacer(1, 4 * mm),
-            note("빨간 카드가 보이면", "파일이나 폴더의 위치를 찾을 수 없다는 뜻입니다. 해당 카드를 누르고 새 위치를 지정하세요. 웹 링크는 인터넷 연결 여부와 관계없이 등록 상태를 유지합니다.", tone="red"),
+            Spacer(1, 3 * mm),
+            note("v2.0.2 위치 동작", "단축키 요청이 처리되는 동안 커서를 빠르게 다른 모니터로 옮겨도 실제 표시 직전의 위치를 사용합니다. 화면 가장자리에서는 패널 전체가 작업 영역 안에 남도록 자동 보정합니다.", tone="blue"),
+            Spacer(1, 2.5 * mm),
+            note("경고색 ! 카드가 보이면", "파일이나 폴더의 위치를 찾을 수 없다는 뜻입니다. 해당 카드를 누르고 새 위치를 지정하세요. 웹 링크는 인터넷 연결 여부와 관계없이 등록 상태를 유지합니다.", tone="amber"),
             PageBreak(),
         ]
     )
@@ -362,7 +374,7 @@ def build_story() -> list[Flowable]:
                 ),
             ),
             Spacer(1, 4 * mm),
-            note("순서를 바꾸려면", "각 항목 오른쪽의 위/아래 화살표를 누르세요. '수정'은 표시 이름과 웹 링크 주소를 바꾸고, 휴지통은 항목을 삭제합니다. 삭제 직후에는 실행취소가 가능합니다.", tone="green"),
+            note("순서를 바꾸려면", "각 항목 오른쪽의 위/아래 화살표를 누르세요. '수정'은 파일·폴더의 표시 이름을 바꾸고, 웹 링크는 표시 이름과 주소를 함께 바꿉니다. 휴지통으로 삭제한 직후에는 실행취소가 가능합니다.", tone="green"),
             PageBreak(),
         ]
     )
@@ -424,8 +436,8 @@ def build_story() -> list[Flowable]:
                 "- 화면 스타일: 시스템 / 밝게 / 어둡게<br/>"
                 "- 패널 열 수: 한 줄에 2개에서 5개<br/>"
                 "- Windows 시작 시 자동 실행<br/>"
-                "- 새 버전 자동 확인 (기본값 꺼짐)<br/>"
-                "- 패널 단축키와 탐색기 빠른 등록 단축키",
+                "- 패널 단축키와 탐색기 빠른 등록 단축키<br/>"
+                "- 앱 정보의 새 버전 자동 확인 (기본값 꺼짐)",
                 BODY,
             ),
             Spacer(1, 4 * mm),
@@ -445,8 +457,8 @@ def build_story() -> list[Flowable]:
                 [
                     [Paragraph("바로가기", STEP_TITLE), Paragraph("항목 추가, 수정, 삭제, 순서 변경", BODY)],
                     [Paragraph("단축키·시작", STEP_TITLE), Paragraph("두 전역 단축키와 실제 Windows 자동 실행 상태", BODY)],
-                    [Paragraph("화면·패널", STEP_TITLE), Paragraph("밝기 모드, 한 줄의 열 개수, 새 버전 확인", BODY)],
-                    [Paragraph("앱 정보", STEP_TITLE), Paragraph("버전, 제작자, 설정 가져오기·내보내기, 진단 정보", BODY)],
+                    [Paragraph("화면·패널", STEP_TITLE), Paragraph("밝기 모드와 한 줄의 열 개수", BODY)],
+                    [Paragraph("앱 정보", STEP_TITLE), Paragraph("버전, 제작자, 업데이트 확인, 설정 가져오기·내보내기, 진단 정보, 프로그램 종료", BODY)],
                 ],
                 colWidths=[42 * mm, CONTENT_WIDTH - 42 * mm],
                 style=TableStyle(
@@ -468,7 +480,7 @@ def build_story() -> list[Flowable]:
             Spacer(1, 3 * mm),
             step(3, "진단 정보 복사", "문제 문의에 필요한 버전과 앱 상태를 복사합니다. 등록한 이름, 파일 경로, 웹 주소와 Windows 사용자명은 포함하지 않습니다."),
             Spacer(1, 5 * mm),
-            note("자동 실행 상태가 다르면", "이전 버전 EXE의 경로가 남아 있으면 QuickAccess가 현재 실행 파일 경로로 복구합니다. 회사 정책 등으로 확인할 수 없으면 앱 정보가 아닌 '단축키·시작' 화면에서 실제 상태를 확인하세요.", tone="amber"),
+            note("자동 실행 상태가 다르면", "이전 버전 EXE의 경로가 남아 있으면 QuickAccess가 현재 실행 파일 경로로 복구합니다. 회사 정책 등으로 확인할 수 없으면 '단축키·시작' 화면에서 실제 상태를 확인하세요.", tone="amber"),
             PageBreak(),
         ]
     )
@@ -476,13 +488,14 @@ def build_story() -> list[Flowable]:
     # Troubleshooting
     story.extend(page_header("7. 종료와 문제 해결", "알아두면 편리합니다"))
     rows = [
-        ("앱을 완전히 종료하려면", "화면 오른쪽 아래 시스템 트레이에서 QuickAccess 아이콘을 우클릭하고 '종료'를 선택합니다."),
+        ("앱을 완전히 종료하려면", "환경 설정의 '앱 정보'에서 '프로그램 종료'를 누르거나, 화면 오른쪽 아래 시스템 트레이에서 QuickAccess 아이콘을 우클릭하고 '종료'를 선택합니다."),
         ("설정 창의 X를 눌렀는데 계속 실행돼요", "정상 동작입니다. QuickAccess는 트레이에 상주해야 단축키를 받을 수 있습니다."),
         ("앱을 다시 실행했는데 창만 떠요", "정상 동작입니다. 이미 상주 중이면 새 프로세스를 남기지 않고 기존 앱에 패널 표시 요청을 전달합니다."),
-        ("파일 카드가 빨갛게 보여요", "파일이 이동 또는 삭제되었거나 네트워크 드라이브가 연결되지 않은 상태입니다. 카드를 눌러 새 경로를 지정하세요."),
+        ("새 버전으로 바꾸고 싶어요", "구버전을 트레이에서 완전히 종료한 뒤 새 EXE를 최종 위치에 두고 한 번 실행하세요. 자동 실행이 켜져 있으면 다음 부팅 경로도 새 EXE로 복구됩니다."),
+        ("경고색 ! 카드가 보여요", "파일이 이동 또는 삭제되었거나 네트워크 드라이브가 연결되지 않은 상태입니다. 카드를 눌러 새 경로를 지정하세요."),
         ("웹 링크가 열리지 않아요", "인터넷 연결과 Windows 기본 브라우저 설정을 확인한 뒤 설정에서 주소를 다시 확인하세요."),
-        ("설정을 옮기거나 되돌리고 싶어요", "앱 정보의 설정 내보내기·가져오기를 사용하세요. 앱은 %APPDATA%\\QuickAccess에도 직전 설정과 제한된 손상 복구본을 보관합니다."),
-        ("로그가 필요해요", "%LOCALAPPDATA%\\QuickAccess\\logs\\quickaccess.log에서 오류 기록을 확인할 수 있습니다."),
+        ("설정을 옮기거나 되돌리고 싶어요", "앱 정보의 설정 내보내기·가져오기를 사용하세요. 앱은 <font name='Consolas'>%APPDATA%\\QuickAccess</font>에도 직전 설정과 제한된 손상 복구본을 보관합니다."),
+        ("로그가 필요해요", "<font name='Consolas'>%LOCALAPPDATA%\\QuickAccess\\logs\\quickaccess.log</font>에서 오류 기록을 확인할 수 있습니다."),
     ]
     troubleshooting = Table(
         [[Paragraph(question, STEP_TITLE), Paragraph(answer, BODY)] for question, answer in rows],
@@ -531,8 +544,8 @@ def build() -> None:
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
         title="QuickAccess 쉬운 사용 설명서",
-        author="Daksle",
-        subject="QuickAccess v2.0.0 Korean user manual",
+        author=APP_AUTHOR,
+        subject=f"QuickAccess v{APP_VERSION} Korean user manual",
         creator="QuickAccess project",
     )
     document.addPageTemplates(PageTemplate(id="manual", frames=[frame], onPage=draw_page))

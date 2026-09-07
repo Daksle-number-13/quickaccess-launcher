@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 import sys
 import tkinter as tk
 import time
@@ -174,6 +176,101 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             )
         finally:
             window.destroy()
+
+    def test_settings_is_fully_positioned_before_map_and_does_not_chase_cursor(self) -> None:
+        class MovingMonitor:
+            def __init__(self) -> None:
+                self.cursor_calls = 0
+
+            def get_cursor_position(self) -> Point:
+                self.cursor_calls += 1
+                return Point(250 if self.cursor_calls == 1 else 1450, 200)
+
+            @staticmethod
+            def get_monitor_context(point: Point) -> MonitorContext:
+                work_area = (
+                    Rect(0, 0, 1000, 760)
+                    if point.x < 1000
+                    else Rect(1000, 0, 2000, 760)
+                )
+                return MonitorContext("display", work_area, work_area, None)
+
+        config = LauncherConfig.default()
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+            ),
+        )
+        monitor = MovingMonitor()
+        window._monitor = monitor
+        try:
+            order: list[str] = []
+            original_prepare = window._prepare_hidden_geometry
+            original_deiconify = window.deiconify
+
+            def prepare(context: MonitorContext) -> None:
+                order.append("prepare")
+                original_prepare(context)
+
+            def deiconify() -> None:
+                order.append("map")
+                original_deiconify()
+
+            with (
+                patch.object(window, "_prepare_hidden_geometry", side_effect=prepare),
+                patch.object(window, "deiconify", side_effect=deiconify),
+            ):
+                window.show()
+                self.root.update()
+                first_geometry = window.geometry()
+                window.show()
+                self.root.update()
+
+            self.assertEqual(1, order.count("prepare"))
+            self.assertLess(order.index("prepare"), order.index("map"))
+            self.assertEqual(1, monitor.cursor_calls)
+            self.assertEqual(first_geometry, window.geometry())
+        finally:
+            window.destroy()
+
+    def test_settings_has_confirmed_explicit_exit_action(self) -> None:
+        config = LauncherConfig.default()
+        shutdown_calls: list[bool] = []
+        window = SettingsWindow(
+            self.root,
+            SettingsActions(
+                get_config=lambda: config,
+                add_item=lambda *args, **kwargs: True,
+                delete_item=lambda _item: True,
+                rename_item=lambda _item, _name: True,
+                move_item=lambda _item, _index: True,
+                set_appearance_mode=lambda _mode: True,
+                set_columns=lambda _columns: True,
+                set_startup=lambda _enabled: True,
+                set_update_checks=lambda _enabled: True,
+                set_hotkeys=lambda _panel, _quick: True,
+                shutdown=lambda: shutdown_calls.append(True),
+            ),
+        )
+        try:
+            self.assertEqual("normal", window._exit_button.cget("state"))
+            with patch("quickaccess.ui.settings.messagebox.askyesno", return_value=True):
+                window._exit_button.invoke()
+                self.root.update()
+            self.assertEqual([True], shutdown_calls)
+        finally:
+            if window.winfo_exists():
+                window.destroy()
 
     def test_settings_v2_navigation_exposes_four_focused_sections(self) -> None:
         config = LauncherConfig.default()
@@ -444,6 +541,42 @@ class UiRuntimeSmokeTests(unittest.TestCase):
             finally:
                 dialog.destroy()
 
+    def test_text_input_validation_reuses_original_monitor_target(self) -> None:
+        class MovingMonitor:
+            def __init__(self) -> None:
+                self.cursor_calls = 0
+
+            def get_cursor_position(self) -> Point:
+                self.cursor_calls += 1
+                return Point(200 if self.cursor_calls == 1 else 1400, 200)
+
+            @staticmethod
+            def get_monitor_context(point: Point) -> MonitorContext:
+                area = (
+                    Rect(0, 0, 900, 700)
+                    if point.x < 900
+                    else Rect(900, 0, 1800, 700)
+                )
+                return MonitorContext("target", area, area, None)
+
+        monitor = MovingMonitor()
+        with patch.object(dialogs_module, "NativeMonitorService", return_value=monitor):
+            dialog = TextInputDialog(
+                self.root,
+                title="웹 링크 추가",
+                prompt="인터넷 주소를 입력하세요.",
+                initial_value="invalid",
+                validator=lambda _value: "올바른 주소를 입력하세요.",
+            )
+            try:
+                self.root.update()
+                dialog._confirm()
+                self.root.update()
+                self.assertEqual(1, monitor.cursor_calls)
+                self.assertLess(dialog.winfo_rootx(), 900)
+            finally:
+                dialog.destroy()
+
     def test_settings_mouse_wheel_reaches_the_last_preference_card(self) -> None:
         config = LauncherConfig.default()
         window = SettingsWindow(
@@ -641,6 +774,33 @@ class UiRuntimeSmokeTests(unittest.TestCase):
         finally:
             popup.hide()
             self.root.update()
+            popup.destroy()
+
+    def test_prepared_popup_is_excluded_from_taskbar(self) -> None:
+        popup = PopupPanel(
+            self.root,
+            PopupActions(
+                activate=lambda _item: None,
+                relocate=lambda _item: None,
+                open_settings=lambda: None,
+            ),
+        )
+        try:
+            popup.prepare(LauncherConfig.default(), {}, Rect(0, 0, 1920, 1040))
+            self.root.update()
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            get_window_long = user32.GetWindowLongW
+            get_window_long.argtypes = [wintypes.HWND, ctypes.c_int]
+            get_window_long.restype = ctypes.c_long
+
+            outer_handle = popup._get_native_window_handle()
+            self.assertIsNotNone(outer_handle)
+            extended_style = int(get_window_long(outer_handle, -20))
+
+            self.assertEqual("QuickAccess", popup.title())
+            self.assertTrue(extended_style & 0x00000080)  # WS_EX_TOOLWINDOW
+            self.assertFalse(extended_style & 0x00040000)  # WS_EX_APPWINDOW
+        finally:
             popup.destroy()
 
     def test_popup_uses_withdraw_fallback_when_native_cloak_is_unavailable(self) -> None:

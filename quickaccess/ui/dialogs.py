@@ -7,6 +7,7 @@ import math
 import tkinter as tk
 
 import customtkinter as ctk
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 
 from ..services.monitor import (
     NativeMonitorService,
@@ -43,6 +44,43 @@ def position_geometry(x: int, y: int) -> str:
     return f"{x:+d}{y:+d}"
 
 
+def _synchronize_window_dpi(
+    window: ctk.CTkToplevel,
+    target_dpi_scale: float | None,
+) -> float:
+    """Apply a target monitor scale before a withdrawn window is mapped."""
+
+    if target_dpi_scale is None:
+        return max(0.1, window._get_window_scaling())
+    try:
+        target = float(target_dpi_scale)
+    except (TypeError, ValueError):
+        return max(0.1, window._get_window_scaling())
+    if not math.isfinite(target) or target <= 0:
+        return max(0.1, window._get_window_scaling())
+    current = ScalingTracker.window_dpi_scaling_dict.get(window)
+    if current is None or abs(float(current) - target) > 0.001:
+        ScalingTracker.window_dpi_scaling_dict[window] = target
+        ScalingTracker.update_scaling_callbacks_for_window(window)
+        try:
+            window._set_scaled_min_max()
+        except (AttributeError, tk.TclError):
+            pass
+    return max(0.1, window._get_window_scaling())
+
+
+def _is_effectively_visible(window: tk.Misc) -> bool:
+    """Account for withdrawn hidden roots used by resident tray apps."""
+
+    shown_marker = getattr(window, "_shown", None)
+    if shown_marker is not None:
+        return bool(shown_marker)
+    try:
+        return bool(window.winfo_viewable())
+    except tk.TclError:
+        return False
+
+
 class TextInputDialog(ctk.CTkToplevel):
     """A compact, themed input dialog with an editable default value."""
 
@@ -60,13 +98,17 @@ class TextInputDialog(ctk.CTkToplevel):
         self._result: str | None = None
         self._validator = validator
         self._parent = parent
+        self._placement_work_area: Rect | None = None
+        self._placement_parent_center: Point | None = None
+        self._placement_parent_visible = False
+        self._placement_scale: float | None = None
 
         self.title(title)
         self.resizable(False, False)
         self.configure(fg_color=BG)
         parent_is_visible = False
         try:
-            parent_is_visible = bool(parent.winfo_viewable())
+            parent_is_visible = _is_effectively_visible(parent)
             if parent_is_visible:
                 self.transient(parent)
         except tk.TclError:
@@ -251,29 +293,60 @@ class TextInputDialog(ctk.CTkToplevel):
         targets[(current + offset) % len(targets)].focus_set()
         return "break"
 
-    def _center_over_parent(self, parent: tk.Misc) -> None:
-        monitor = NativeMonitorService()
-        parent_is_visible = False
-        try:
-            parent_is_visible = bool(parent.winfo_viewable())
-            if parent_is_visible:
-                anchor = Point(
-                    parent.winfo_rootx() + parent.winfo_width() // 2,
-                    parent.winfo_rooty() + parent.winfo_height() // 2,
+    def _center_over_parent(
+        self,
+        parent: tk.Misc,
+        *,
+        reuse_target: bool = False,
+    ) -> None:
+        if reuse_target and self._placement_work_area is not None:
+            work_area = self._placement_work_area
+            parent_is_visible = self._placement_parent_visible
+            parent_center = self._placement_parent_center
+            target_scale = self._placement_scale
+        else:
+            monitor = NativeMonitorService()
+            parent_is_visible = False
+            parent_center: Point | None = None
+            target_scale: float | None = None
+            try:
+                parent_is_visible = _is_effectively_visible(parent)
+                if parent_is_visible:
+                    parent_center = Point(
+                        parent.winfo_rootx() + parent.winfo_width() // 2,
+                        parent.winfo_rooty() + parent.winfo_height() // 2,
+                    )
+                    anchor = parent_center
+                else:
+                    anchor = monitor.get_cursor_position()
+                getter = getattr(monitor, "get_monitor_context", None)
+                if callable(getter):
+                    context = getter(anchor)
+                    work_area = context.work_area
+                    target_scale = context.scale
+                else:
+                    work_area = monitor.get_monitor_work_area(anchor)
+            except Exception:
+                work_area = Rect(
+                    0,
+                    0,
+                    max(1, self.winfo_screenwidth()),
+                    max(1, self.winfo_screenheight()),
                 )
-            else:
-                cursor = monitor.get_cursor_position()
-                anchor = cursor
-            work_area = monitor.get_monitor_work_area(anchor)
-        except Exception:
-            work_area = Rect(
-                0,
-                0,
-                max(1, self.winfo_screenwidth()),
-                max(1, self.winfo_screenheight()),
-            )
+            self._placement_work_area = work_area
+            self._placement_parent_center = parent_center
+            self._placement_parent_visible = parent_is_visible
+            self._placement_scale = target_scale
 
-        scale = max(0.1, self._get_window_scaling())
+            # Move the still-withdrawn HWND onto the destination display first
+            # so CTk never exposes a frame rendered for the previous monitor.
+            tk.Toplevel.geometry(
+                self,
+                position_geometry(work_area.left + 8, work_area.top + 8),
+            )
+            self.update_idletasks()
+
+        scale = _synchronize_window_dpi(self, target_scale)
         available_width = max(1, int((work_area.width - 24) / scale))
         available_height = max(1, int((work_area.height - 24) / scale))
         compact = available_width < 460 or available_height < 280
@@ -330,10 +403,10 @@ class TextInputDialog(ctk.CTkToplevel):
             self._apply_window_scaling(logical_width),
             self._apply_window_scaling(logical_height),
         )
-        if parent_is_visible:
+        if parent_is_visible and parent_center is not None:
             desired = Point(
-                parent.winfo_rootx() + (parent.winfo_width() - rendered.width) // 2,
-                parent.winfo_rooty() + (parent.winfo_height() - rendered.height) // 2,
+                parent_center.x - rendered.width // 2,
+                parent_center.y - rendered.height // 2,
             )
             position = clamp_window_to_work_area(desired, rendered, work_area)
         else:
@@ -351,7 +424,7 @@ class TextInputDialog(ctk.CTkToplevel):
             self._error.grid()
             self._entry.configure(border_color=DANGER)
             self.update_idletasks()
-            self._center_over_parent(self._parent)
+            self._center_over_parent(self._parent, reuse_target=True)
             self._entry.focus_force()
             return
         self._result = value
@@ -472,10 +545,17 @@ class ToastManager:
                 command=lambda: self._run_action(action_command),
             ).grid(row=0, column=3, padx=(0, 14), pady=13)
 
+        target_scale: float | None = None
         try:
             monitor = NativeMonitorService()
             cursor = monitor.get_cursor_position()
-            work_area = monitor.get_monitor_work_area(cursor)
+            getter = getattr(monitor, "get_monitor_context", None)
+            if callable(getter):
+                context = getter(cursor)
+                work_area = context.work_area
+                target_scale = context.scale
+            else:
+                work_area = monitor.get_monitor_work_area(cursor)
         except Exception:
             work_area = Rect(
                 0,
@@ -483,6 +563,12 @@ class ToastManager:
                 window.winfo_screenwidth(),
                 window.winfo_screenheight() - 40,
             )
+        tk.Toplevel.geometry(
+            window,
+            position_geometry(work_area.left + 8, work_area.top + 8),
+        )
+        window.update_idletasks()
+        _synchronize_window_dpi(window, target_scale)
         self._position_toast(
             window,
             card,
@@ -490,8 +576,9 @@ class ToastManager:
             base_width,
             base_height,
             work_area,
-            attempts_remaining=2,
+            attempts_remaining=0,
         )
+        window.update_idletasks()
         window.deiconify()
         window.lift()
         self._dismiss_after = window.after(max(500, duration_ms), self.close)
@@ -521,19 +608,9 @@ class ToastManager:
         card.configure(width=width, height=height)
         message_label.configure(wraplength=max(110, width - 90))
         window.geometry(f"{width}x{height}{position_geometry(x, y)}")
-        if attempts_remaining:
-            window.after(
-                80,
-                lambda: self._position_toast(
-                    window,
-                    card,
-                    message_label,
-                    base_width,
-                    base_height,
-                    work_area,
-                    attempts_remaining=attempts_remaining - 1,
-                ),
-            )
+        # The target monitor and DPI were fixed while withdrawn.  Do not run
+        # delayed cursor/DPI reposition passes after mapping; those make the
+        # toast visibly jump and can move it away from the original display.
 
     def _run_action(self, action_command: Callable[[], None]) -> None:
         self.close()

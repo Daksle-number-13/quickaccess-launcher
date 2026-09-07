@@ -75,6 +75,13 @@ def check_release_metadata(root: Path = ROOT) -> str:
     expected_fixed = tuple(int(part) for part in version_parts) + (0,)
     expected_string = f"{project_version}.0"
     errors: list[str] = []
+    for relative in (
+        "devtools/build_license_bundle.py",
+        "devtools/check_locked_environment.py",
+        "devtools/release_manifest.py",
+    ):
+        if not (root / relative).is_file():
+            errors.append(f"required release tool is missing: {relative}")
     if package_version != project_version:
         errors.append(
             f"quickaccess.__version__ is {package_version}, expected {project_version}"
@@ -105,9 +112,30 @@ def check_release_metadata(root: Path = ROOT) -> str:
         (root / "requirements-dev.txt").read_text(encoding="utf-8").splitlines(),
         source="requirements-dev.txt",
     )
-    for tool in ("pyinstaller", "pytest"):
-        if tool not in dev_requirements:
-            errors.append(f"requirements-dev.txt must pin {tool}")
+    required_build_environment = {
+        "altgraph",
+        "charset-normalizer",
+        "colorama",
+        "darkdetect",
+        "iniconfig",
+        "packaging",
+        "pefile",
+        "pluggy",
+        "pygments",
+        "pyinstaller",
+        "pyinstaller-hooks-contrib",
+        "pywin32-ctypes",
+        "pytest",
+        "reportlab",
+        "setuptools",
+        "six",
+    }
+    missing_build_pins = sorted(required_build_environment - dev_requirements.keys())
+    if missing_build_pins:
+        errors.append(
+            "requirements-dev.txt is missing exact build/runtime pins: "
+            + ", ".join(missing_build_pins)
+        )
 
     spec_text = (root / "quickaccess.spec").read_text(encoding="utf-8")
     for required in (
@@ -158,13 +186,34 @@ def check_release_metadata(root: Path = ROOT) -> str:
         "$env:PYTHONHASHSEED",
         "$env:SOURCE_DATE_EPOCH",
         "devtools\\release_manifest.py",
+        "devtools\\build_license_bundle.py",
+        "status --porcelain",
+        "tag --points-at HEAD",
+        "$expectedTag",
+        "$sourceDirtyText",
+        "$releaseEligibleText",
+        "$SkipTests -and -not $AllowDirty",
+        "$finalGitStatus",
+        "devtools\\check_locked_environment.py",
+        "Start-Process",
+        "WaitForExit($SmokeTimeoutSeconds * 1000)",
+        "Stop-QuickAccessProcessTree",
+        "taskkill.exe",
+        "$Process.Kill($true)",
+        "WaitForExit(5000)",
+        "$smokeProcess.ExitCode",
     ):
         if invariant not in build_text:
             errors.append(f"build.ps1 is missing release invariant: {invariant}")
+    if "build.ps1 -Clean -SmokeTest" not in ci_text:
+        errors.append("CI must build and smoke-test the one-file executable")
 
     sign_text = (root / "sign.ps1").read_text(encoding="utf-8")
     for invariant in (
         "QuickAccess.release.json",
+        "companion_artifacts",
+        "release_eligible",
+        "schema_version",
         "TimeStamperCertificate",
         "Get-AuthenticodeSignature",
         "Get-FileHash",

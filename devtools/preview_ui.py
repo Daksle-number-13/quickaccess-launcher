@@ -130,6 +130,11 @@ def render(mode: str, appearance: str, output: Path, page: str) -> None:
                 set_startup=lambda _enabled: True,
                 set_update_checks=lambda _enabled: True,
                 set_hotkeys=lambda _panel, _quick: True,
+                get_startup_status=lambda: True,
+                import_config=lambda: True,
+                export_config=lambda: True,
+                copy_diagnostics=lambda: True,
+                shutdown=lambda: None,
             ),
         )
         widget.show()

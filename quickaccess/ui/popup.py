@@ -500,6 +500,7 @@ class PopupPanel(ctk.CTkToplevel):
         self._native_cloak_available: bool | None = None
         self._native_window_handle: int | None = None
         self.withdraw()
+        self.title("QuickAccess")
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self._cards: list[_LauncherCard] = []
@@ -531,6 +532,15 @@ class PopupPanel(ctk.CTkToplevel):
             # ``-transparentcolor`` is Windows-specific; a matching surface
             # background remains a clean fallback for tests and other Tk ports.
             self.configure(fg_color=SURFACE)
+        if sys.platform == "win32":
+            try:
+                # Applying ``-transparentcolor`` rebuilds Tk's outer HWND and
+                # can drop the tool-window style added by ``overrideredirect``.
+                # Reapply it last so the reusable popup never receives its own
+                # taskbar or Alt+Tab entry while mapped or DWM-cloaked.
+                self.attributes("-toolwindow", True)
+            except tk.TclError:
+                pass
         self.bind("<Escape>", self._on_escape)
         self.bind("<Control-f>", self._focus_search, add="+")
         self.bind("<FocusOut>", self._on_focus_out, add="+")

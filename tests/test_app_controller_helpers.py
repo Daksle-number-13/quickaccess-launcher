@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from quickaccess.app import QuickAccessApp
+from quickaccess.app import MAX_CONCURRENT_QUICK_ADDS, QuickAccessApp
 from quickaccess.commands import (
     CommandBus,
     CommandSource,
     LaunchResultCommand,
     OpenPanelCommand,
+    QuickAddResultCommand,
 )
 from quickaccess.models import LauncherConfig
 from quickaccess.services.explorer import ExplorerTargetResult
@@ -21,6 +23,7 @@ from quickaccess.services.startup import (
     StartupRegistrationState,
     StartupRegistrationStatus,
 )
+from quickaccess.services.tray import TrayState
 from quickaccess.services.update_check import UpdateCheckResult
 
 
@@ -313,6 +316,28 @@ class _QuickAddWatchdogHarness:
         self.toast = _ToastRecorder()
 
 
+class _QuickAddWorkerHarness:
+    def __init__(self, get_target: object) -> None:
+        self._stopping = False
+        self._quick_add_inflight = False
+        self._quick_add_generation = 0
+        self._quick_add_timeout_after: str | None = None
+        self._quick_add_slots = threading.BoundedSemaphore(MAX_CONCURRENT_QUICK_ADDS)
+        self.root = _StartRootRecorder()
+        self.explorer = SimpleNamespace(get_target=get_target)
+        self.toast = _ToastRecorder()
+        self.published: queue.Queue[object] = queue.Queue()
+
+    def _safe_publish(self, command: object) -> None:
+        self.published.put(command)
+
+    def _expire_quick_add(self, generation: int) -> None:
+        QuickAccessApp._expire_quick_add(self, generation)  # type: ignore[arg-type]
+
+    def _cancel_quick_add_timeout(self) -> None:
+        QuickAccessApp._cancel_quick_add_timeout(self)  # type: ignore[arg-type]
+
+
 class _StartRootRecorder:
     def __init__(self) -> None:
         self.scheduled: list[tuple[int, object]] = []
@@ -358,6 +383,7 @@ class _StartHarness:
         )
         self.startup_sync_calls = 0
         self.update_check_calls = 0
+        self.health_check_calls = 0
         self.start_events: list[str] = []
         self._update_check_after: str | None = None
         self._update_check_generation = 0
@@ -391,6 +417,9 @@ class _StartHarness:
     def _schedule_monitor_refresh() -> None:
         pass
 
+    def _schedule_integration_health_check(self) -> None:
+        self.health_check_calls += 1
+
     def _check_for_update(self) -> None:
         self.update_check_calls += 1
 
@@ -402,6 +431,46 @@ class _StartHarness:
 
     def _cancel_update_check_schedule(self) -> None:
         QuickAccessApp._cancel_update_check_schedule(self)  # type: ignore[arg-type]
+
+
+class _IntegrationHealthHarness:
+    def __init__(self) -> None:
+        self._integration_health_after: str | None = "health-timer"
+        self._stopping = False
+        self._integration_health_results: queue.SimpleQueue[
+            tuple[str, bool, str | None]
+        ] = queue.SimpleQueue()
+        self._integration_recovery_inflight: set[str] = set()
+        self._integration_recovery_attempts = {"hotkeys": 0, "tray": 0}
+        self._integration_retry_not_before = {"hotkeys": 0.0, "tray": 0.0}
+        self._integration_outage_notified = False
+        self.hotkeys = SimpleNamespace(running=False, bindings={})
+        self.tray = SimpleNamespace(healthy=False, state=TrayState.STOPPED)
+        self.toast = _ToastRecorder()
+        self.open_settings_calls = 0
+        self.recovery_requests: list[str] = []
+        self.schedule_calls = 0
+
+    def _apply_integration_recovery_results(self) -> None:
+        QuickAccessApp._apply_integration_recovery_results(self)  # type: ignore[arg-type]
+
+    def _hotkey_service_healthy(self) -> bool:
+        return QuickAccessApp._hotkey_service_healthy(self)  # type: ignore[arg-type]
+
+    def _tray_service_healthy(self) -> bool:
+        return QuickAccessApp._tray_service_healthy(self)  # type: ignore[arg-type]
+
+    def _tray_service_starting(self) -> bool:
+        return QuickAccessApp._tray_service_starting(self)  # type: ignore[arg-type]
+
+    def _start_integration_recovery_if_due(self, name: str, _now: float) -> None:
+        self.recovery_requests.append(name)
+
+    def _schedule_integration_health_check(self) -> None:
+        self.schedule_calls += 1
+
+    def open_settings(self) -> None:
+        self.open_settings_calls += 1
 
 
 def _run_scheduled_callback(harness: _StartHarness, callback_name: str) -> bool:
@@ -551,6 +620,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
         QuickAccessApp.start(harness)  # type: ignore[arg-type]
 
         self.assertEqual(["prewarm", "hotkeys"], harness.start_events)
+        self.assertEqual(1, harness.health_check_calls)
 
     def test_start_always_reconciles_startup_without_network_opt_in(self) -> None:
         harness = _StartHarness(check_updates=False)
@@ -560,6 +630,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
         self.assertEqual(1, harness.startup_sync_calls)
         self.assertFalse(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(0, harness.update_check_calls)
+        self.assertEqual(1, harness.health_check_calls)
 
     def test_start_schedules_update_check_only_after_explicit_opt_in(self) -> None:
         harness = _StartHarness(check_updates=True)
@@ -569,6 +640,7 @@ class ControllerResponsivenessTests(unittest.TestCase):
         self.assertEqual(1, harness.startup_sync_calls)
         self.assertTrue(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(1, harness.update_check_calls)
+        self.assertEqual(1, harness.health_check_calls)
 
     def test_smoke_start_changes_neither_startup_registry_nor_network(self) -> None:
         harness = _StartHarness(check_updates=True, smoke_test=True)
@@ -578,6 +650,39 @@ class ControllerResponsivenessTests(unittest.TestCase):
         self.assertEqual(0, harness.startup_sync_calls)
         self.assertFalse(_run_scheduled_callback(harness, "_run_scheduled_update_check"))
         self.assertEqual(0, harness.update_check_calls)
+        self.assertEqual(0, harness.health_check_calls)
+
+    def test_health_check_exposes_settings_when_both_entry_points_are_lost(self) -> None:
+        harness = _IntegrationHealthHarness()
+
+        QuickAccessApp._poll_integration_health(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(1, harness.open_settings_calls)
+        self.assertEqual(["hotkeys", "tray"], harness.recovery_requests)
+        self.assertEqual(1, harness.schedule_calls)
+        self.assertTrue(harness._integration_outage_notified)
+        self.assertIn("중단", harness.toast.messages[0][0])
+
+    def test_health_recovery_result_resets_success_and_limits_failed_service(self) -> None:
+        harness = _IntegrationHealthHarness()
+        harness._integration_recovery_attempts["hotkeys"] = 2
+        harness._integration_recovery_inflight.add("hotkeys")
+        harness._integration_health_results.put(("hotkeys", True, None))
+
+        QuickAccessApp._apply_integration_recovery_results(harness)  # type: ignore[arg-type]
+
+        self.assertEqual(0, harness._integration_recovery_attempts["hotkeys"])
+        self.assertNotIn("hotkeys", harness._integration_recovery_inflight)
+        self.assertIn("복구", harness.toast.messages[-1][0])
+
+        harness._integration_recovery_attempts["tray"] = 3
+        harness._integration_recovery_inflight.add("tray")
+        harness._integration_health_results.put(("tray", False, "backend failed"))
+        QuickAccessApp._apply_integration_recovery_results(harness)  # type: ignore[arg-type]
+
+        self.assertNotIn("tray", harness._integration_recovery_inflight)
+        self.assertGreater(harness._integration_retry_not_before["tray"], time.monotonic())
+        self.assertIn("자동 복구에 실패", harness.toast.messages[-1][0])
 
     def test_update_checks_require_explicit_opt_in(self) -> None:
         harness = _UpdateCheckHarness()
@@ -764,6 +869,113 @@ class ControllerResponsivenessTests(unittest.TestCase):
                 harness, (7, late_result)
             )
         ask_name.assert_not_called()
+
+    def test_quick_add_workers_remain_bounded_after_repeated_timeouts(self) -> None:
+        release = threading.Event()
+        entered: queue.Queue[threading.Thread] = queue.Queue()
+
+        def blocked_target(_hwnd: int | None) -> ExplorerTargetResult:
+            entered.put(threading.current_thread())
+            release.wait(3.0)
+            return ExplorerTargetResult(success=False, error="test shell unavailable")
+
+        harness = _QuickAddWorkerHarness(blocked_target)
+        workers: list[threading.Thread] = []
+        try:
+            for _ in range(MAX_CONCURRENT_QUICK_ADDS):
+                QuickAccessApp._begin_quick_add(harness, 123)  # type: ignore[arg-type]
+                workers.append(entered.get(timeout=1.0))
+                harness._expire_quick_add(harness._quick_add_generation)
+            generation = harness._quick_add_generation
+            for _ in range(12):
+                QuickAccessApp._begin_quick_add(harness, 123)  # type: ignore[arg-type]
+            self.assertTrue(entered.empty())
+            self.assertEqual(MAX_CONCURRENT_QUICK_ADDS, len(harness.root.scheduled))
+            self.assertEqual(generation, harness._quick_add_generation)
+            self.assertFalse(harness._quick_add_inflight)
+            self.assertIn("이전 탐색기 응답", harness.toast.messages[-1][0])
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(1.0)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+
+        # Completed stale calls return their slots and a later attempt can run.
+        QuickAccessApp._begin_quick_add(harness, 456)  # type: ignore[arg-type]
+        recovered = entered.get(timeout=1.0)
+        recovered.join(1.0)
+        self.assertFalse(recovered.is_alive())
+        self.assertEqual(
+            MAX_CONCURRENT_QUICK_ADDS + 1, len(harness.root.scheduled)
+        )
+
+    def test_quick_add_unexpected_worker_error_returns_result_and_slot(self) -> None:
+        entered: queue.Queue[threading.Thread] = queue.Queue()
+
+        def failing_target(_hwnd: int | None) -> ExplorerTargetResult:
+            entered.put(threading.current_thread())
+            raise RuntimeError("unexpected shell failure")
+
+        harness = _QuickAddWorkerHarness(failing_target)
+        QuickAccessApp._begin_quick_add(harness, 123)  # type: ignore[arg-type]
+        worker = entered.get(timeout=1.0)
+        worker.join(1.0)
+        self.assertFalse(worker.is_alive())
+        command = harness.published.get(timeout=1.0)
+        self.assertIsInstance(command, QuickAddResultCommand)
+        generation, result = command.result  # type: ignore[union-attr]
+        self.assertEqual(harness._quick_add_generation, generation)
+        self.assertIsInstance(result, ExplorerTargetResult)
+        self.assertFalse(result.success)
+        QuickAccessApp._finish_quick_add(
+            harness, command.result  # type: ignore[arg-type, union-attr]
+        )
+        self.assertFalse(harness._quick_add_inflight)
+        self.assertIsNone(harness._quick_add_timeout_after)
+        self.assertIn("탐색기 항목을 읽지 못했습니다", harness.toast.messages[-1][0])
+        acquired = [
+            harness._quick_add_slots.acquire(False)
+            for _ in range(MAX_CONCURRENT_QUICK_ADDS)
+        ]
+        self.assertTrue(all(acquired))
+        for held in acquired:
+            if held:
+                harness._quick_add_slots.release()
+
+    def test_quick_add_start_failures_release_slot_and_ui_wait(self) -> None:
+        for failing_operation in ("thread", "timer"):
+            with self.subTest(failing_operation=failing_operation):
+                harness = _QuickAddWorkerHarness(lambda _hwnd: None)
+                target = (
+                    patch(
+                        "quickaccess.app.threading.Thread.start",
+                        side_effect=RuntimeError("start failed"),
+                    )
+                    if failing_operation == "thread"
+                    else patch.object(
+                        harness.root, "after", side_effect=RuntimeError("timer failed")
+                    )
+                )
+                with target, self.assertRaises(RuntimeError):
+                    QuickAccessApp._begin_quick_add(harness, 123)  # type: ignore[arg-type]
+                self.assertFalse(harness._quick_add_inflight)
+                self.assertIsNone(harness._quick_add_timeout_after)
+                acquired = [
+                    harness._quick_add_slots.acquire(False)
+                    for _ in range(MAX_CONCURRENT_QUICK_ADDS)
+                ]
+                self.assertTrue(all(acquired))
+                for held in acquired:
+                    if held:
+                        harness._quick_add_slots.release()
+
+    def test_quick_add_does_not_start_while_stopping(self) -> None:
+        harness = _QuickAddWorkerHarness(lambda _hwnd: self.fail("unexpected COM call"))
+        harness._stopping = True
+        QuickAccessApp._begin_quick_add(harness, 123)  # type: ignore[arg-type]
+        self.assertEqual([], harness.root.scheduled)
+        self.assertFalse(harness._quick_add_inflight)
+        self.assertEqual([], harness.toast.messages)
 
     def test_hotkey_rollback_failure_is_visible_to_user(self) -> None:
         harness = _HotkeyRollbackHarness()

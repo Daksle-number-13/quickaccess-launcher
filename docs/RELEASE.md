@@ -16,10 +16,16 @@
 - CI와 로컬 릴리스 Python 버전의 일치
 - `quickaccess.spec`의 one-file, 창 모드, 아이콘, 버전 리소스 설정
 - 설치된 패키지 간 의존성 충돌 여부
+- 전체 테스트와 Python 바이트 컴파일 통과
+- Git 작업 폴더가 깨끗하고 현재 커밋에 정확히 `v버전` 태그가 있는지
+
+태그 전 개발 확인 빌드에만 `-AllowDirty`를 명시할 수 있습니다. 이 경우 manifest에
+소스 커밋, `source_dirty`와 `release_eligible: false`가 기록되며 서명 및 공개
+Release에는 사용할 수 없습니다. `-SkipTests`도 이 확인 빌드에서만 허용됩니다.
 
 `PYTHONHASHSEED=0`과 `SOURCE_DATE_EPOCH`도 고정합니다. 기본 소스 시점은 현재
-Git 커밋의 시각이며, Git 메타데이터가 없는 소스 묶음에서는
-`-SourceDateEpoch <Unix초>`를 명시해야 합니다.
+Git 커밋의 시각입니다. 공개 산출물은 소스 커밋과 정확한 태그를 기록해야 하므로
+`.git` 메타데이터가 포함된 checkout에서만 빌드할 수 있습니다.
 
 이 설정은 우연한 차이를 줄이고 같은 빌드 환경에서 결과를 재현하기 위한
 것입니다. PyInstaller bootloader, Windows SDK/런타임, 빌드 경로까지 다른 두
@@ -28,11 +34,13 @@ Git 커밋의 시각이며, Git 메타데이터가 없는 소스 묶음에서는
 
 ## 산출물과 서명 상태
 
-빌드가 끝나면 `dist`에 두 파일이 생성됩니다.
+빌드가 끝나면 `dist`에 세 파일이 생성됩니다.
 
 - `QuickAccess.exe`: 설치 없이 실행하는 one-file 앱
 - `QuickAccess.release.json`: 버전, 크기, SHA-256, 빌드 런타임,
-  Authenticode 상태를 기록한 기계 판독용 매니페스트
+  소스 커밋·dirty 여부와 Authenticode 상태를 기록한 기계 판독용 매니페스트
+- `QuickAccess_Third_Party_Licenses_v버전.zip`: 고정된 런타임·빌드·테스트·문서
+  패키지의 원본 라이선스 및 제3자 고지 묶음
 
 서명하지 않은 빌드는 매니페스트에 반드시 다음처럼 기록됩니다.
 
@@ -54,10 +62,21 @@ Git 커밋의 시각이며, Git 메타데이터가 없는 소스 묶음에서는
 
 ## GitHub Release 규칙
 
-공개 Release에는 아래 두 파일만 같은 빌드에서 나온 한 쌍으로 첨부합니다.
+빌드 실패·시간 초과·자식 프로세스 정리와 서명 전 거부 경로는 실제 사용자 앱을
+실행하지 않는 전용 시험 파일로 재현할 수 있습니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File devtools/verify_release_scripts.ps1
+```
+
+이 명령은 13개 동작을 검사하고 결과 JSON을 `artifacts/audit-build`에 남깁니다.
+최종 QuickAccess EXE의 실행 검사는 앞의 `build.ps1 -SmokeTest`가 별도로 수행합니다.
+
+공개 Release에는 아래 세 파일을 같은 빌드에서 나온 한 묶음으로 첨부합니다.
 
 - `QuickAccess.exe`
 - `QuickAccess.release.json`
+- `QuickAccess_Third_Party_Licenses_v버전.zip`
 
 Release 태그는 `vMAJOR.MINOR.PATCH` 형식을 사용하고, 앱 내부 버전은 앞의 `v`를
 제외한 값과 같아야 합니다. 업로드 후 매니페스트의 SHA-256과 다운로드한 EXE의

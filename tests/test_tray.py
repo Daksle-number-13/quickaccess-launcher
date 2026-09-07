@@ -78,6 +78,7 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(tray.start())
         self.assertTrue(tray.wait_until_ready(1))
         self.assertEqual(tray.state, TrayState.RUNNING)
+        self.assertTrue(tray.healthy)
         self.assertFalse(tray.start())
 
         icon = FakeIcon.instances[-1]
@@ -96,6 +97,7 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(tray.stop(1))
         self.assertEqual(tray.state, TrayState.STOPPED)
+        self.assertFalse(tray.healthy)
         self.assertTrue(tray.stop(1))
 
     def test_late_callback_after_bus_close_is_ignored(self) -> None:

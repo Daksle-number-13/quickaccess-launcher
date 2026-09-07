@@ -28,12 +28,48 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     throw "Release manifest is missing. Build with build.ps1 before signing: $manifestPath"
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$expectedLicenseName = "QuickAccess_Third_Party_Licenses_v$($manifest.version).zip"
+if (
+    $manifest.schema_version -ne 2 -or
+    $manifest.product -ne 'QuickAccess Launcher' -or
+    $manifest.version -notmatch '^\d+\.\d+\.\d+$' -or
+    $manifest.build.release_eligible -ne $true -or
+    $manifest.build.source_dirty -ne $false -or
+    $manifest.build.source_commit -notmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$'
+) {
+    throw 'Release manifest is not a clean, tagged, schema-v2 signing candidate.'
+}
 $unsignedHash = Get-FileHash -LiteralPath $executablePath -Algorithm SHA256
 if (
     $manifest.artifact.name -ne [IO.Path]::GetFileName($executablePath) -or
-    $manifest.artifact.sha256 -ne $unsignedHash.Hash
+    $manifest.artifact.sha256 -notmatch '^[0-9A-F]{64}$' -or
+    $manifest.artifact.sha256 -ne $unsignedHash.Hash -or
+    $manifest.authenticode.signed -ne $false -or
+    $manifest.authenticode.status -ne 'NotSigned'
 ) {
     throw 'Release manifest does not match the executable being signed.'
+}
+$companionArtifacts = @($manifest.companion_artifacts)
+if ($companionArtifacts.Count -ne 1) {
+    throw 'Release manifest does not contain the required license companion artifact.'
+}
+foreach ($companion in $companionArtifacts) {
+    $companionName = [IO.Path]::GetFileName([string]$companion.name)
+    if (
+        $companionName -cne [string]$companion.name -or
+        $companionName -cne $expectedLicenseName -or
+        [string]$companion.sha256 -notmatch '^[0-9A-F]{64}$'
+    ) {
+        throw "Unsafe companion artifact name in release manifest: $($companion.name)"
+    }
+    $companionPath = Join-Path (Split-Path -Parent $executablePath) $companionName
+    if (-not (Test-Path -LiteralPath $companionPath -PathType Leaf)) {
+        throw "Release companion artifact is missing: $companionPath"
+    }
+    $companionHash = Get-FileHash -LiteralPath $companionPath -Algorithm SHA256
+    if ($companionHash.Hash -ne [string]$companion.sha256) {
+        throw "Release companion artifact hash mismatch: $companionName"
+    }
 }
 
 $certificate = $null

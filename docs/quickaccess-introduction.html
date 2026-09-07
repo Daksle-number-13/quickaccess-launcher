@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="QuickAccess Launcher v2의 검색, 다중 등록, 설정 백업·복원, 자동 실행 복구와 실제 사용 흐름을 소개합니다.">
+  <meta name="description" content="QuickAccess Launcher v2.0.2의 빠른 호출, 안정적인 아이콘·경로 검사, 자동 실행 복구와 실제 사용 흐름을 소개합니다.">
   <meta name="theme-color" content="#0b63e5">
   <title>QuickAccess Launcher | 자주 쓰는 파일·폴더·링크를 한 번에</title>
   <link rel="icon" type="image/png" href="../assets/quickaccess-mark.png">
@@ -1061,9 +1061,9 @@
     <section class="hero" id="top">
       <div class="container hero-grid">
         <div class="hero-copy">
-          <div class="eyebrow">QuickAccess v2 · Windows 빠른 실행 런처</div>
+          <div class="eyebrow">QuickAccess v2.0.2 · Windows 빠른 실행 런처</div>
           <h1>찾으러 가지 말고,<br><span class="accent">바로 여세요.</span></h1>
-          <p>QuickAccess는 자주 쓰는 폴더, 파일, 웹 링크를 하나의 패널에 모아 전역 단축키 한 번으로 여는 가벼운 Windows 상주형 런처입니다.</p>
+          <p>QuickAccess는 자주 쓰는 폴더, 파일, 웹 링크를 하나의 패널에 모아 전역 단축키 한 번으로 여는 가벼운 Windows 상주형 런처입니다. v2.0.2는 창을 실제로 표시하기 직전의 현재 커서 위치를 사용하고, 아이콘·경로·자동 실행 복구를 강화했습니다.</p>
           <div class="hero-actions">
             <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/latest">최신 공개판 확인</a>
             <a class="button secondary" href="#comparison">도입 효과 살펴보기</a>
@@ -1086,13 +1086,13 @@
     <div class="container trust-strip" aria-label="제품 핵심 정보">
       <div class="trust-grid">
         <div class="trust-item"><strong>Portable EXE</strong><span>설치 과정 없이 바로 실행</span></div>
-        <div class="trust-item"><strong>빠른 상주 호출</strong><span>측정값 p95 16.2ms</span></div>
+        <div class="trust-item"><strong>빠른 상주 호출</strong><span>v2.0.2 실측 p95 12.7ms</span></div>
         <div class="trust-item"><strong>로컬 우선</strong><span>바로가기 정보는 PC에 저장</span></div>
         <div class="trust-item"><strong>한글·멀티모니터</strong><span>혼합 DPI와 한글 경로 지원</span></div>
       </div>
       <aside class="evidence-note" aria-label="성능 측정 안내">
         <strong>실제 릴리스 PC 측정</strong>
-        <span>v2 후보를 실제 혼합 배율 3모니터 PC에서 36회 측정한 결과, 상주 상태의 명령 발행부터 창 노출 신호까지 p95 16.2ms였습니다. 첫 픽셀 합성 시간은 아니며 PC·보안 프로그램·화면 구성에 따라 달라질 수 있습니다. <a href="PERFORMANCE.md">측정 조건 보기</a></span>
+        <span>v2.0.2를 실제 100%·200%·100% 혼합 배율 3모니터 PC에서 측정한 결과, 상주 상태의 명령 발행부터 창 노출 신호까지 p95 12.7ms, 안정화까지 p95 14.1ms였습니다. 전체 36/36회가 성공했고 렌더 재생성과 지연 재표시는 0회였습니다. 첫 픽셀 합성 시간은 아니며 PC·보안 프로그램·화면 구성에 따라 달라질 수 있습니다. <a href="PERFORMANCE.md">측정 조건 보기</a></span>
       </aside>
     </div>
 
@@ -1161,13 +1161,13 @@
       <div class="container">
         <div class="section-heading">
           <div class="section-kicker">Core Features</div>
-          <h2 id="features-title">v2에서 더 빠르고<br>더 안전하게</h2>
+          <h2 id="features-title">v2.0.2에서 더 빠르고<br>더 안정적으로</h2>
           <p>상주 호출의 반응성은 지키면서 검색, 다중 등록, 설정 이동과 Windows 복구 흐름을 강화했습니다.</p>
         </div>
         <div class="feature-grid">
           <article class="card feature-card"><span class="tag">실행</span><h3>파일·폴더·웹 링크 통합</h3><p>형식이 다른 업무 항목도 같은 카드 목록에서 한 번에 열 수 있습니다.</p></article>
           <article class="card feature-card"><span class="tag">검색</span><h3>한글 초성과 키보드 탐색</h3><p>이름·경로·URL을 여러 검색어로 좁히고, 방향키와 Enter만으로 바로 실행합니다.</p></article>
-          <article class="card feature-card"><span class="tag">단축키</span><h3>커서가 있는 모니터에 즉시 표시</h3><p>배율이 다른 모니터별 패널을 미리 준비해 화면을 옮겨도 불필요한 재구성을 줄입니다.</p></article>
+          <article class="card feature-card"><span class="tag">단축키</span><h3>현재 커서가 있는 모니터에 표시</h3><p>호출 좌표를 미리 저장하지 않고 실제 표시 직전에 확인합니다. 배율이 다른 모니터별 패널을 미리 준비해 불필요한 재구성도 줄입니다.</p></article>
           <article class="card feature-card"><span class="tag">다중 등록</span><h3>탐색기 선택 항목 한 번에 추가</h3><p>활성 탐색기에서 고른 여러 파일·폴더를 순서대로, 한 번의 저장으로 등록합니다.</p></article>
           <article class="card feature-card"><span class="tag">복구</span><h3>깨진 경로 바로 재지정</h3><p>이동·삭제된 항목은 상태를 표시하고, 같은 카드에서 새로운 위치를 선택할 수 있습니다.</p></article>
           <article class="card feature-card"><span class="tag">설정</span><h3>목적별 네 화면</h3><p>바로가기, 단축키·시작, 화면·패널, 앱 정보로 나눠 원하는 설정을 빠르게 찾습니다.</p></article>
@@ -1196,7 +1196,19 @@
             <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
               <img src="screenshots/quickaccess-settings-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
             </a>
-            <figcaption class="shot-copy"><h3>환경 설정 · 실제 캡처</h3><p>v2에서는 긴 한 화면 대신 목적별 네 화면으로 이동합니다. 좁은 창에서도 각 화면만 자연스럽게 스크롤됩니다.</p><div class="settings-groups" aria-label="v2 환경 설정 화면 구성"><span>바로가기</span><span>단축키·시작</span><span>화면·패널</span><span>앱 정보</span></div></figcaption>
+            <figcaption class="shot-copy"><h3>환경 설정 · 바로가기</h3><p>v2.0.2는 긴 한 화면 대신 목적별 네 화면으로 이동합니다. 좁은 창에서도 선택한 화면만 자연스럽게 스크롤됩니다.</p><div class="settings-groups" aria-label="v2.0.2 환경 설정 화면 구성"><span>바로가기</span><span>단축키·시작</span><span>화면·패널</span><span>앱 정보</span></div></figcaption>
+          </figure>
+          <figure class="shot-card">
+            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-shortcuts-light.png" target="_blank" rel="noopener noreferrer" aria-label="단축키와 시작 설정 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-shortcuts-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess 단축키와 Windows 자동 실행 설정 화면">
+            </a>
+            <figcaption class="shot-copy"><h3>환경 설정 · 단축키·시작</h3><p>두 전역 단축키를 바꾸고 Windows 자동 실행의 희망 설정과 실제 등록 상태를 같은 화면에서 확인합니다.</p></figcaption>
+          </figure>
+          <figure class="shot-card">
+            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-about-light.png" target="_blank" rel="noopener noreferrer" aria-label="앱 정보 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-about-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess Version 2.0.2와 만든 사람 Daksle이 표시된 앱 정보 화면">
+            </a>
+            <figcaption class="shot-copy"><h3>환경 설정 · 앱 정보</h3><p>Version 2.0.2, 만든 사람 Daksle, 업데이트 확인, 설정 가져오기·내보내기, 진단 정보 복사와 앱 종료를 제공합니다.</p></figcaption>
           </figure>
         </div>
       </div>
@@ -1215,7 +1227,7 @@
             <div class="motion-copy">
               <span class="demo-label">빠른 실행</span>
               <h3>Ctrl + Space로 패널 열기</h3>
-              <p>현재 작업 화면을 벗어나지 않고 패널을 호출한 뒤 원하는 항목을 실행합니다.</p>
+              <p>현재 작업 화면을 벗어나지 않고, 실제 표시 시점의 커서 위치에 패널을 호출한 뒤 원하는 항목을 실행합니다.</p>
             </div>
 
             <div class="motion-stage" aria-hidden="true">
@@ -1393,6 +1405,7 @@
           <details><summary>정말 설치가 필요 없나요?</summary><p>네. QuickAccess.exe를 원하는 폴더에 두고 실행하면 됩니다. 다만 설정, 백업과 로그는 사용자 AppData에 저장되며, Windows 자동 실행을 켜면 현재 사용자 시작프로그램 레지스트리에 실행 경로를 등록합니다.</p></details>
           <details><summary>설정창의 X를 눌러도 프로그램이 남아 있어요.</summary><p>정상입니다. 전역 단축키를 받기 위해 시스템 트레이에 상주합니다. 완전히 종료하려면 트레이의 QuickAccess 아이콘을 우클릭하고 ‘종료’를 선택하세요.</p></details>
           <details><summary>새 버전으로 바꾸면 자동 실행 경로도 바뀌나요?</summary><p>기존 버전을 트레이에서 완전히 종료하고 새 EXE를 최종 위치에서 한 번 실행하면, 자동 실행이 켜져 있는 경우 해당 새 경로로 등록을 복구합니다.</p></details>
+          <details><summary>패널이 어느 위치에 표시되나요?</summary><p>v2.0.2는 단축키를 누른 순간의 좌표가 아니라 창을 실제로 표시하기 직전의 현재 커서 좌표를 사용합니다. 커서가 있는 모니터에서 열리며, 화면 가장자리에서는 패널 전체가 작업 영역 안에 남도록 위치를 보정합니다.</p></details>
           <details><summary>다른 PC로 바로가기 설정을 옮길 수 있나요?</summary><p>환경 설정의 앱 정보 화면에서 설정을 내보낸 뒤 다른 PC에서 가져올 수 있습니다. 가져오기 전에 추가·변경·충돌 항목을 확인하고 기존 설정에 병합하거나 전체 교체할 수 있습니다.</p></details>
           <details><summary>Windows 시작 시 실행이 켜졌는데 동작하지 않으면요?</summary><p>v2는 설정값뿐 아니라 Windows에 실제로 등록된 실행 경로를 함께 확인합니다. 누락되거나 이전 EXE 경로가 남아 있으면 현재 실행 파일 경로로 다시 맞출 수 있습니다.</p></details>
           <details><summary>삭제하려면 어떻게 하나요?</summary><p>트레이에서 종료하고 환경 설정에서 Windows 자동 실행을 끈 뒤 EXE를 삭제합니다. 개인 설정까지 지우려면 %APPDATA%\QuickAccess와 %LOCALAPPDATA%\QuickAccess 폴더를 선택적으로 삭제하면 됩니다.</p></details>
@@ -1402,7 +1415,7 @@
 
     <section class="cta-section" aria-label="다운로드 안내">
       <div class="container cta-panel">
-        <div><h2>반복해서 찾는 시간을<br>한 번의 단축키로 바꿔보세요.</h2><p>QuickAccess Launcher · Windows 10/11 x64 · Portable EXE · v2 기능 소개</p></div>
+        <div><h2>반복해서 찾는 시간을<br>한 번의 단축키로 바꿔보세요.</h2><p>QuickAccess Launcher · Windows 10/11 x64 · Portable EXE · v2.0.2 기능 소개</p></div>
         <a class="button" href="https://github.com/Daksle-number-13/quickaccess-launcher/releases/latest" target="_blank" rel="noopener noreferrer">최신 공식 Release 열기</a>
       </div>
     </section>
@@ -1410,7 +1423,7 @@
 
   <footer>
     <div class="container footer-grid">
-      <div class="footer-copy">QuickAccess Launcher · MIT License · Maintained by Daksle · v2 기능 소개</div>
+      <div class="footer-copy">QuickAccess Launcher · MIT License · Maintained by Daksle · v2.0.2 기능 소개</div>
       <div class="footer-links">
         <a href="https://github.com/Daksle-number-13/quickaccess-launcher" target="_blank" rel="noopener noreferrer">GitHub 저장소</a>
         <a href="../output/pdf/QuickAccess_Easy_Manual_KO.pdf">쉬운 사용 설명서</a>

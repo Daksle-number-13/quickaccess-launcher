@@ -107,6 +107,30 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual(result.status, UpdateCheckStatus.ERROR)
         self.assertFalse(called)
 
+    def test_oversized_release_version_returns_error_without_raising(self) -> None:
+        for component_index in range(3):
+            with self.subTest(component=component_index):
+                components = ["0", "0", "0"]
+                components[component_index] = "9" * 5000
+                tag = "v" + ".".join(components)
+                result = check_for_update(
+                    "1.0.0", fetch=_fetch_returning({"tag_name": tag})
+                )
+                self.assertFalse(result.available)
+                self.assertEqual(result.status, UpdateCheckStatus.ERROR)
+                self.assertEqual(result.error_reason, "invalid_version")
+                self.assertIsNone(result.release_url)
+                self.assertIsNone(result.asset_url)
+
+    def test_oversized_current_version_skips_network_and_returns_error(self) -> None:
+        def fetch(_url: str, _timeout: float) -> bytes:
+            self.fail("An invalid current version must not initiate a request")
+
+        result = check_for_update("9" * 5000 + ".0.0", fetch=fetch)
+        self.assertFalse(result.available)
+        self.assertEqual(result.status, UpdateCheckStatus.ERROR)
+        self.assertEqual(result.error_reason, "invalid_request")
+
     def test_repository_and_returned_urls_are_origin_pinned(self) -> None:
         result = check_for_update(
             "1.0.0",

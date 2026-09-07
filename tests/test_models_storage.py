@@ -21,7 +21,7 @@ from quickaccess.models import (
     UnsupportedSchemaVersionError,
     normalize_web_url,
 )
-from quickaccess.storage import ConfigStore
+from quickaccess.storage import MAX_CONFIG_BYTES, ConfigStore
 
 
 TEST_TEMP_ROOT = Path(__file__).resolve().parent
@@ -287,6 +287,69 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertEqual("system", payload["appearance_mode"])
             self.assertEqual([0, 1], [item["order"] for item in payload["items"]])
 
+    def test_missing_primary_restores_valid_rolling_backup_before_defaults(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            backup_path = path.with_name("items.bak.json")
+            expected = LauncherConfig(items=[])
+            expected.run_on_startup = False
+            expected.add_item(r"C:\Recovered", name="백업 복원", item_type="folder")
+            backup_path.write_text(
+                json.dumps(expected.to_dict(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            result = ConfigStore(path).load()
+
+            self.assertTrue(result.recovered)
+            self.assertTrue(result.restored_from_backup)
+            self.assertFalse(result.created)
+            self.assertEqual(backup_path, result.backup_path)
+            self.assertEqual("백업 복원", result.config.items[0].name)
+            restored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual("백업 복원", restored["items"][0]["name"])
+
+    def test_oversized_primary_and_rolling_backup_are_read_with_a_hard_limit(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            oversized = b" " * (MAX_CONFIG_BYTES + 1)
+            path.write_bytes(oversized)
+
+            recovered = ConfigStore(path, user_home=temporary_directory).load()
+
+            self.assertTrue(recovered.recovered)
+            self.assertFalse(recovered.restored_from_backup)
+            self.assertIsNotNone(recovered.backup_path)
+            assert recovered.backup_path is not None
+            self.assertEqual(len(oversized), recovered.backup_path.stat().st_size)
+
+            path.unlink()
+            rolling_backup = path.with_name("items.bak.json")
+            rolling_backup.write_bytes(oversized)
+            created = ConfigStore(path, user_home=temporary_directory).load()
+
+            self.assertTrue(created.created)
+            self.assertFalse(created.restored_from_backup)
+            self.assertEqual(2, len(created.config.items))
+            self.assertEqual(len(oversized), rolling_backup.stat().st_size)
+
+    def test_deeply_nested_primary_and_backup_recover_without_recursion_crash(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            deep_json = ("[" * 10_000 + "0" + "]" * 10_000).encode("utf-8")
+            path.write_bytes(deep_json)
+            backup_path = path.with_name("items.bak.json")
+            backup_path.write_bytes(deep_json)
+
+            result = ConfigStore(path, user_home=temporary_directory).load()
+
+            self.assertTrue(result.recovered)
+            self.assertFalse(result.restored_from_backup)
+            self.assertEqual(2, len(result.config.items))
+            self.assertIsNotNone(result.backup_path)
+            assert result.backup_path is not None
+            self.assertEqual(deep_json, result.backup_path.read_bytes())
+
     def test_save_is_atomic_and_round_trips(self) -> None:
         with writable_test_directory() as temporary_directory:
             path = Path(temporary_directory) / "items.json"
@@ -503,6 +566,74 @@ class ConfigStoreTests(unittest.TestCase):
             self.assertEqual(corrupt_bytes, result.backup_path.read_bytes())
             restored = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual("백업 항목", restored["items"][0]["name"])
+
+    def test_failed_recovery_save_preserves_sources_for_next_launch(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            backup_path = path.with_name("items.bak.json")
+            corrupt_bytes = b'{"hotkey": broken'
+            path.write_bytes(corrupt_bytes)
+            expected = LauncherConfig(items=[])
+            expected.add_item(r"C:\Recovered", name="다음 실행 복원", item_type="folder")
+            backup_bytes = json.dumps(
+                expected.to_dict(),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            backup_path.write_bytes(backup_bytes)
+            store = ConfigStore(path)
+            real_replace = os.replace
+
+            def fail_only_recovery_save(source: object, destination: object) -> None:
+                if Path(destination) == path:
+                    raise PermissionError("save denied")
+                real_replace(source, destination)
+
+            with (
+                patch(
+                    "quickaccess.storage.os.replace",
+                    side_effect=fail_only_recovery_save,
+                ),
+                self.assertRaises(PermissionError),
+            ):
+                store.load()
+
+            self.assertFalse(path.exists())
+            self.assertEqual(backup_bytes, backup_path.read_bytes())
+            corrupt_snapshots = list(path.parent.glob("items.corrupt-*.json"))
+            self.assertEqual(1, len(corrupt_snapshots))
+            self.assertEqual(corrupt_bytes, corrupt_snapshots[0].read_bytes())
+
+            recovered = store.load()
+
+            self.assertTrue(recovered.recovered)
+            self.assertTrue(recovered.restored_from_backup)
+            self.assertEqual("다음 실행 복원", recovered.config.items[0].name)
+
+    def test_failed_save_never_overwrites_good_backup_with_corrupt_primary(self) -> None:
+        with writable_test_directory() as temporary_directory:
+            path = Path(temporary_directory) / "items.json"
+            backup_path = path.with_name("items.bak.json")
+            path.write_bytes(b'{"items": broken')
+            expected = LauncherConfig(items=[])
+            expected.add_item(r"C:\Recovered", name="정상 백업", item_type="folder")
+            backup_bytes = json.dumps(
+                expected.to_dict(),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            backup_path.write_bytes(backup_bytes)
+            store = ConfigStore(path)
+
+            with (
+                patch(
+                    "quickaccess.storage._atomic_replace",
+                    side_effect=PermissionError("replace denied"),
+                ),
+                self.assertRaises(PermissionError),
+            ):
+                store.save(LauncherConfig.default())
+
+            self.assertEqual(backup_bytes, backup_path.read_bytes())
+            self.assertEqual(b'{"items": broken', path.read_bytes())
 
     def test_invalid_rolling_backup_falls_back_to_defaults(self) -> None:
         with writable_test_directory() as temporary_directory:

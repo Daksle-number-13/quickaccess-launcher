@@ -19,10 +19,29 @@ except ImportError:  # pragma: no cover - exercised on non-Windows CI
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 DEFAULT_VALUE_NAME = "QuickAccessLauncher"
+MAX_RUN_COMMAND_LENGTH = 260
 
 
 class StartupUnavailableError(RuntimeError):
     """Raised when the HKCU Run key cannot be used on this platform."""
+
+
+class StartupCommandTooLongError(ValueError):
+    """Raised before Windows receives an unusable Run command."""
+
+    def __init__(
+        self,
+        actual_length: int,
+        *,
+        maximum_length: int = MAX_RUN_COMMAND_LENGTH,
+    ) -> None:
+        self.actual_length = actual_length
+        self.maximum_length = maximum_length
+        super().__init__(
+            "Windows 시작프로그램 명령은 "
+            f"{maximum_length}자를 초과할 수 없습니다 (현재 {actual_length}자). "
+            "QuickAccess.exe를 더 짧은 폴더 경로로 이동해 주세요."
+        )
 
 
 class StartupRegistrationState(str, Enum):
@@ -212,12 +231,10 @@ def startup_command_matches(
     return actual_parts[1:] == expected_arguments
 
 
-def build_startup_command(
+def _format_startup_command(
     executable: str | os.PathLike[str],
     arguments: Sequence[str | os.PathLike[str]] = (),
 ) -> str:
-    """Build a command line using Windows' CommandLineToArgvW quoting rules."""
-
     executable_text = os.fspath(executable)
     if not executable_text or "\x00" in executable_text:
         raise ValueError("executable must be a non-empty path without NUL characters")
@@ -228,6 +245,26 @@ def build_startup_command(
             raise ValueError("startup arguments must not contain NUL characters")
         parts.append(argument_text)
     return subprocess.list2cmdline(parts)
+
+
+def _validate_startup_command_length(command: str) -> None:
+    # Windows measures Unicode command lines in UTF-16 code units.  Python's
+    # len() undercounts supplementary characters such as emoji, so use the
+    # representation received by the registry API instead.
+    command_length = len(command.encode("utf-16-le")) // 2
+    if command_length > MAX_RUN_COMMAND_LENGTH:
+        raise StartupCommandTooLongError(command_length)
+
+
+def build_startup_command(
+    executable: str | os.PathLike[str],
+    arguments: Sequence[str | os.PathLike[str]] = (),
+) -> str:
+    """Build a Windows Run command and reject commands Windows cannot run."""
+
+    command = _format_startup_command(executable, arguments)
+    _validate_startup_command_length(command)
+    return command
 
 
 class StartupManager:
@@ -293,7 +330,21 @@ class StartupManager:
     ) -> StartupRegistrationStatus:
         """Inspect actual HKCU state without mutating it or raising read errors."""
 
-        expected = build_startup_command(executable, arguments)
+        expected = _format_startup_command(executable, arguments)
+        try:
+            _validate_startup_command_length(expected)
+        except StartupCommandTooLongError as error:
+            # Disabling must remain possible even when the current executable
+            # moved into a path too long to register.  Enabling, however, is
+            # not a state Windows can honor and is reported without touching
+            # the registry.
+            if desired_enabled:
+                return StartupRegistrationStatus(
+                    state=StartupRegistrationState.UNREADABLE,
+                    desired_enabled=True,
+                    expected_command=expected,
+                    error=str(error),
+                )
         registry = self._registry
         if registry is None:
             return StartupRegistrationStatus(
@@ -373,8 +424,8 @@ class StartupManager:
         executable: str | os.PathLike[str],
         arguments: Sequence[str | os.PathLike[str]] = (),
     ) -> str:
-        registry = self._require_registry()
         command = build_startup_command(executable, arguments)
+        registry = self._require_registry()
         with registry.CreateKeyEx(
             registry.HKEY_CURRENT_USER,
             RUN_KEY,
@@ -415,7 +466,9 @@ class StartupManager:
 
 __all__ = [
     "DEFAULT_VALUE_NAME",
+    "MAX_RUN_COMMAND_LENGTH",
     "RUN_KEY",
+    "StartupCommandTooLongError",
     "StartupManager",
     "StartupRegistrationState",
     "StartupRegistrationStatus",

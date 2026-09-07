@@ -34,6 +34,9 @@ def _copy_release_metadata_tree(destination: Path) -> None:
         "sign.ps1",
         "version_info.txt",
         ".github/workflows/ci.yml",
+        "devtools/build_license_bundle.py",
+        "devtools/check_locked_environment.py",
+        "devtools/release_manifest.py",
         "quickaccess/__init__.py",
         "quickaccess/services/update_check.py",
     ):
@@ -72,4 +75,59 @@ def test_release_metadata_rejects_build_ci_python_drift(release_tmp: Path) -> No
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="build Python"):
+        check_release_metadata(release_tmp)
+
+
+def test_release_metadata_requires_one_file_ci_build(release_tmp: Path) -> None:
+    _copy_release_metadata_tree(release_tmp)
+    workflow = release_tmp / ".github" / "workflows" / "ci.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            ".\\build.ps1 -Clean -SmokeTest",
+            ".\\build.ps1 -Clean",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="smoke-test"):
+        check_release_metadata(release_tmp)
+
+
+def test_release_metadata_requires_git_release_guards(release_tmp: Path) -> None:
+    _copy_release_metadata_tree(release_tmp)
+    build = release_tmp / "build.ps1"
+    build.write_text(
+        build.read_text(encoding="utf-8").replace("status --porcelain", "status --short"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="status --porcelain"):
+        check_release_metadata(release_tmp)
+
+
+def test_release_metadata_requires_waited_smoke_test(release_tmp: Path) -> None:
+    _copy_release_metadata_tree(release_tmp)
+    build = release_tmp / "build.ps1"
+    build.write_text(
+        build.read_text(encoding="utf-8").replace(
+            "WaitForExit($SmokeTimeoutSeconds * 1000)",
+            "HasExited",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="WaitForExit"):
+        check_release_metadata(release_tmp)
+
+
+def test_release_metadata_requires_bounded_smoke_process_tree_cleanup(
+    release_tmp: Path,
+) -> None:
+    _copy_release_metadata_tree(release_tmp)
+    build = release_tmp / "build.ps1"
+    build.write_text(
+        build.read_text(encoding="utf-8").replace(
+            "Stop-QuickAccessProcessTree",
+            "Stop-Process",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Stop-QuickAccessProcessTree"):
         check_release_metadata(release_tmp)

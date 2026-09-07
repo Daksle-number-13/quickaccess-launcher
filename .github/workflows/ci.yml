@@ -24,7 +24,7 @@ jobs:
 
   test:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -54,3 +54,7 @@ jobs:
       - name: Check dependency consistency
         shell: pwsh
         run: python -m pip check
+
+      - name: Build and smoke-test one-file executable
+        shell: pwsh
+        run: .\build.ps1 -Clean -SmokeTest -PythonExecutable python -AllowDirty -SkipTests

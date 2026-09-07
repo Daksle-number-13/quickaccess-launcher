@@ -21,6 +21,11 @@ _T = TypeVar("_T")
 _REPLACE_RETRY_WINERRORS = frozenset({5, 32})
 _REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1)
 DEFAULT_MAX_CORRUPT_BACKUPS = 5
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
+
+
+class _ConfigFileTooLargeError(ValueError):
+    """Raised when a config exceeds the resident app's bounded read limit."""
 
 
 def _atomic_replace(
@@ -104,14 +109,27 @@ class ConfigStore:
     def load(self) -> LoadResult:
         with self._lock:
             if not self.path.exists():
+                config = self._load_rolling_backup_unlocked()
+                if config is not None:
+                    self._save_unlocked(config)
+                    return LoadResult(
+                        config=config,
+                        recovered=True,
+                        restored_from_backup=True,
+                        backup_path=self._rolling_backup_path(),
+                    )
                 config = LauncherConfig.default(user_home=self._user_home)
                 self._save_unlocked(config)
                 return LoadResult(config=config, created=True)
 
             try:
-                with self.path.open("r", encoding="utf-8") as stream:
-                    raw_data = json.load(stream)
-            except (json.JSONDecodeError, UnicodeError):
+                raw_data = self._read_json_unlocked(self.path)
+            except (
+                json.JSONDecodeError,
+                UnicodeError,
+                RecursionError,
+                _ConfigFileTooLargeError,
+            ):
                 return self._recover_unlocked()
 
             try:
@@ -184,6 +202,9 @@ class ConfigStore:
 
     def _recover_unlocked(self) -> LoadResult:
         backup_path = self._next_backup_path()
+        # Detach the invalid primary atomically before writing its replacement.
+        # If that save fails, the next launch sees a missing primary and can
+        # restore the untouched rolling backup before considering defaults.
         _atomic_replace(self.path, backup_path)
         config = self._load_rolling_backup_unlocked()
         restored_from_backup = config is not None
@@ -205,11 +226,29 @@ class ConfigStore:
         if not backup_path.is_file():
             return None
         try:
-            with backup_path.open("r", encoding="utf-8") as stream:
-                raw_data = json.load(stream)
+            raw_data = self._read_json_unlocked(backup_path)
             return LauncherConfig.from_data(raw_data, user_home=self._user_home)
-        except (OSError, json.JSONDecodeError, UnicodeError, TypeError, ValueError):
+        except (
+            OSError,
+            json.JSONDecodeError,
+            UnicodeError,
+            RecursionError,
+            TypeError,
+            ValueError,
+        ):
             return None
+
+    @staticmethod
+    def _read_json_unlocked(path: Path) -> object:
+        """Read one UTF-8 JSON document without accepting unbounded input."""
+
+        with path.open("rb") as stream:
+            source = stream.read(MAX_CONFIG_BYTES + 1)
+        if len(source) > MAX_CONFIG_BYTES:
+            raise _ConfigFileTooLargeError(
+                f"설정 파일은 {MAX_CONFIG_BYTES // (1024 * 1024)}MB 이하여야 합니다"
+            )
+        return json.loads(source.decode("utf-8"))
 
     def _next_backup_path(self) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -277,6 +316,23 @@ class ConfigStore:
         stem = self.path.stem if self.path.suffix else self.path.name
         return self.path.with_name(f"{stem}.bak{suffix}")
 
+    def _primary_is_valid_backup_source_unlocked(self) -> bool:
+        """Avoid replacing the last-known-good backup with damaged input."""
+
+        try:
+            raw_data = self._read_json_unlocked(self.path)
+            parsed = LauncherConfig.from_data(raw_data, user_home=self._user_home)
+        except (
+            OSError,
+            json.JSONDecodeError,
+            UnicodeError,
+            RecursionError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+        return not self._discarded_invalid_items(raw_data, parsed)
+
     def _save_unlocked(self, config: LauncherConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = config.to_dict()
@@ -298,10 +354,12 @@ class ConfigStore:
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            if self.path.exists():
+            if self.path.exists() and self._primary_is_valid_backup_source_unlocked():
                 # Best-effort single rolling backup of the previous version so
                 # an accidental bad edit can be recovered from the file system
-                # without blocking or failing the actual save.
+                # without blocking or failing the actual save.  A corrupt or
+                # oversized primary must never overwrite the last-known-good
+                # backup if the subsequent replace also fails.
                 try:
                     shutil.copy2(self.path, self._rolling_backup_path())
                 except OSError:

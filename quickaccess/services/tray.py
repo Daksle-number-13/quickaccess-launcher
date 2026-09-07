@@ -113,7 +113,23 @@ class TrayService:
 
     @property
     def is_running(self) -> bool:
-        return self.state in (TrayState.STARTING, TrayState.RUNNING)
+        with self._lock:
+            return (
+                self._state in (TrayState.STARTING, TrayState.RUNNING)
+                and self._thread is not None
+                and self._thread.is_alive()
+            )
+
+    @property
+    def healthy(self) -> bool:
+        """Return whether the native tray loop is alive and fully visible."""
+
+        with self._lock:
+            return (
+                self._state is TrayState.RUNNING
+                and self._thread is not None
+                and self._thread.is_alive()
+            )
 
     def start(self) -> bool:
         """Start the tray loop; return ``False`` if it was already active."""

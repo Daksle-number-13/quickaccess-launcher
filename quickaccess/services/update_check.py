@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 DEFAULT_REPO = "Daksle-number-13/quickaccess-launcher"
 DEFAULT_TIMEOUT_SECONDS = 4.0
 _RELEASES_API = "https://api.github.com/repos/{repo}/releases/latest"
+_MAX_VERSION_LENGTH = 64
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
 _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -57,7 +58,12 @@ class UpdateCheckResult:
 
 
 def _parse_version(text: str) -> tuple[int, int, int] | None:
-    match = _VERSION_PATTERN.fullmatch(text.strip())
+    text = text.strip()
+    # Reject unreasonable release tags before matching or converting integers.
+    # This also stays safely below Python's integer-string conversion limit.
+    if len(text) > _MAX_VERSION_LENGTH:
+        return None
+    match = _VERSION_PATTERN.fullmatch(text)
     if not match:
         return None
     major, minor, patch = match.groups()

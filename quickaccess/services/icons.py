@@ -18,6 +18,9 @@ from typing import Protocol
 
 _SHGFI_ICON = 0x00000100
 _SHGFI_SMALLICON = 0x00000001
+_SHGFI_USEFILEATTRIBUTES = 0x00000010
+_FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+_FILE_ATTRIBUTE_NORMAL = 0x00000080
 _DI_NORMAL = 0x0003
 _DIB_RGB_COLORS = 0
 _BI_RGB = 0
@@ -34,6 +37,50 @@ class IconImage:
 
 class _IconApi(Protocol):
     def extract(self, path: str, size: int) -> IconImage | None: ...
+
+
+def _has_visible_alpha(image: IconImage) -> bool:
+    """Return whether *image* contains at least one drawable pixel."""
+
+    expected_length = image.width * image.height * 4
+    return (
+        image.width > 0
+        and image.height > 0
+        and len(image.bgra) == expected_length
+        and any(image.bgra[index] for index in range(3, expected_length, 4))
+    )
+
+
+def _recover_legacy_alpha(black: bytes, white: bytes) -> bytes:
+    """Recover straight BGRA pixels from black/white legacy icon renders.
+
+    Old HICON resources often carry transparency only in their AND mask.
+    ``DrawIconEx`` then leaves the destination alpha channel at zero, making
+    an otherwise valid black or monochrome icon look completely empty.  The
+    difference between renders over black and white backgrounds is exactly
+    the inverse coverage, including antialiased edge pixels.
+    """
+
+    if len(black) != len(white) or len(black) % 4:
+        return b""
+    recovered = bytearray(len(black))
+    for index in range(0, len(black), 4):
+        differences = [
+            max(0, int(white[index + channel]) - int(black[index + channel]))
+            for channel in range(3)
+        ]
+        alpha = 255 - max(differences)
+        if alpha <= 0:
+            continue
+        for channel in range(3):
+            component = int(black[index + channel])
+            recovered[index + channel] = (
+                component
+                if alpha == 255
+                else min(255, (component * 255 + alpha // 2) // alpha)
+            )
+        recovered[index + 3] = alpha
+    return bytes(recovered)
 
 
 class _SHFILEINFOW(ctypes.Structure):
@@ -128,13 +175,51 @@ class _NativeIconApi:
         self.gdi32.DeleteDC.restype = wintypes.BOOL
 
     def extract(self, path: str, size: int) -> IconImage | None:
+        return self._extract(path, size, attributes=0, flags=0)
+
+    def extract_generic(
+        self,
+        path: str,
+        size: int,
+        *,
+        is_directory: bool = False,
+    ) -> IconImage | None:
+        """Read a registered type icon without touching the target path."""
+
+        lowered_path = path.strip().lower()
+        extension = (
+            ".url"
+            if lowered_path.startswith(("http://", "https://"))
+            else ntpath.splitext(path)[1]
+        )
+        lookup_path = "QuickAccessFolder" if is_directory else f"QuickAccess{extension}"
+        if not extension and not is_directory:
+            lookup_path += ".file"
+        attributes = (
+            _FILE_ATTRIBUTE_DIRECTORY if is_directory else _FILE_ATTRIBUTE_NORMAL
+        )
+        return self._extract(
+            lookup_path,
+            size,
+            attributes=attributes,
+            flags=_SHGFI_USEFILEATTRIBUTES,
+        )
+
+    def _extract(
+        self,
+        path: str,
+        size: int,
+        *,
+        attributes: int,
+        flags: int,
+    ) -> IconImage | None:
         info = _SHFILEINFOW()
         result = self.shell32.SHGetFileInfoW(
             path,
-            0,
+            attributes,
             ctypes.byref(info),
             ctypes.sizeof(info),
-            _SHGFI_ICON | _SHGFI_SMALLICON,
+            _SHGFI_ICON | _SHGFI_SMALLICON | flags,
         )
         if not result or not info.hIcon:
             return None
@@ -173,14 +258,26 @@ class _NativeIconApi:
                 memory_dc, 0, 0, info.hIcon, size, size, 0, None, _DI_NORMAL
             ):
                 return None
-            pixels = bytearray(ctypes.string_at(bits, size * size * 4))
-            # Some legacy shell icons do not expose an alpha channel.  Keep
-            # their visible pixels opaque instead of returning a blank image.
-            if not any(pixels[index] for index in range(3, len(pixels), 4)):
-                for index in range(0, len(pixels), 4):
-                    if pixels[index] or pixels[index + 1] or pixels[index + 2]:
-                        pixels[index + 3] = 255
-            return IconImage(size, size, bytes(pixels))
+            pixels = bytes(ctypes.string_at(bits, size * size * 4))
+            image = IconImage(size, size, pixels)
+            if _has_visible_alpha(image):
+                return image
+
+            # Legacy icons expose transparency through an AND mask rather
+            # than per-pixel alpha.  A second render over white lets us
+            # recover both black foreground pixels and fractional coverage.
+            ctypes.memset(bits, 0xFF, size * size * 4)
+            if not self.user32.DrawIconEx(
+                memory_dc, 0, 0, info.hIcon, size, size, 0, None, _DI_NORMAL
+            ):
+                return None
+            white_pixels = bytes(ctypes.string_at(bits, size * size * 4))
+            recovered = IconImage(
+                size,
+                size,
+                _recover_legacy_alpha(pixels, white_pixels),
+            )
+            return recovered if _has_visible_alpha(recovered) else None
         finally:
             if old_object and memory_dc:
                 self.gdi32.SelectObject(memory_dc, old_object)
@@ -227,6 +324,8 @@ class _KeyRequestState:
     callbacks: list[IconReadyCallback] = field(default_factory=list)
     active: _IconCandidate | None = None
     retry_timers: set[threading.Timer] = field(default_factory=set)
+    specific_candidate: _IconCandidate | None = None
+    specific_deadline: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +333,8 @@ class _IconWork:
     key: str
     state: _KeyRequestState
     candidate: _IconCandidate
+    generic: bool
+    is_directory: bool
 
 
 class IconService:
@@ -248,6 +349,7 @@ class IconService:
         api: _IconApi | None | object = "auto",
         max_workers: int = 4,
         retry_delays: tuple[float, ...] = (0.5, 2.0),
+        path_specific_timeout_seconds: float = 0.5,
     ) -> None:
         if max_workers <= 0:
             raise ValueError("max_workers must be greater than zero")
@@ -257,10 +359,18 @@ class IconService:
             for delay in normalized_retry_delays
         ):
             raise ValueError("retry delays must be finite non-negative values")
+        if (
+            not math.isfinite(path_specific_timeout_seconds)
+            or path_specific_timeout_seconds <= 0
+        ):
+            raise ValueError(
+                "path_specific_timeout_seconds must be a finite positive value"
+            )
         self._default_callback = on_ready
         self._size = size
         self._on_callback_error = on_callback_error
         self._retry_delays = normalized_retry_delays
+        self._path_specific_timeout_seconds = float(path_specific_timeout_seconds)
         self._lock = threading.RLock()
         self._callbacks_idle = threading.Condition(self._lock)
         self._cache: dict[str, IconImage] = {}
@@ -270,17 +380,39 @@ class IconService:
         self._callbacks_inflight = 0
         self._callback_threads: dict[int, int] = {}
         self._api = _load_native_api() if api == "auto" else api
-        self._work_queue: queue.Queue[_IconWork | None] = queue.Queue()
+        # Generic registered-type icons use SHGFI_USEFILEATTRIBUTES and never
+        # touch the target.  Keep them isolated from the single path-specific
+        # shell lane: an offline shortcut or a misbehaving shell extension can
+        # no longer hold every ordinary icon hostage.
+        self._generic_queue: queue.Queue[_IconWork | None] = queue.Queue()
+        self._specific_queue: queue.Queue[_IconWork | None] = queue.Queue()
         self._workers: list[threading.Thread] = []
+        self._specific_circuit_open = False
+        self._specific_watchdog: threading.Thread | None = None
         if self._api is not None:
             for index in range(max_workers):
                 worker = threading.Thread(
                     target=self._worker_loop,
-                    name=f"QuickAccessIconWorker-{index + 1}",
+                    args=(self._generic_queue,),
+                    name=f"QuickAccessIconGenericWorker-{index + 1}",
                     daemon=True,
                 )
                 worker.start()
                 self._workers.append(worker)
+            specific_worker = threading.Thread(
+                target=self._worker_loop,
+                args=(self._specific_queue,),
+                name="QuickAccessIconSpecificWorker",
+                daemon=True,
+            )
+            specific_worker.start()
+            self._workers.append(specific_worker)
+            self._specific_watchdog = threading.Thread(
+                target=self._specific_watchdog_loop,
+                name="QuickAccessIconSpecificWatchdog",
+                daemon=True,
+            )
+            self._specific_watchdog.start()
 
     @property
     def available(self) -> bool:
@@ -315,9 +447,9 @@ class IconService:
                 state.ready.append(_IconCandidate(path, candidate_identity))
             self._enqueue_next_locked(key, state)
 
-    def _worker_loop(self) -> None:
+    def _worker_loop(self, work_queue: queue.Queue[_IconWork | None]) -> None:
         while True:
-            work = self._work_queue.get()
+            work = work_queue.get()
             if work is None:
                 return
             with self._lock:
@@ -329,10 +461,20 @@ class IconService:
                 ):
                     continue
 
-            image = self._extract(work.candidate.path)
+            image = self._extract(
+                work.candidate.path,
+                generic=work.generic,
+                is_directory=work.is_directory,
+            )
             callbacks: tuple[IconReadyCallback, ...] = ()
             timers_to_cancel: tuple[threading.Timer, ...] = ()
             with self._lock:
+                if not work.generic:
+                    # A returned native call proves the single specific lane
+                    # is responsive again.  Stale queued work is discarded by
+                    # the identity checks below without another shell call.
+                    self._specific_circuit_open = False
+                    self._callbacks_idle.notify_all()
                 state = self._states.get(work.key)
                 if (
                     self._closed
@@ -340,6 +482,10 @@ class IconService:
                     or state.active is not work.candidate
                 ):
                     continue
+                if state.specific_candidate is work.candidate:
+                    state.specific_candidate = None
+                    state.specific_deadline = None
+                    self._callbacks_idle.notify_all()
                 state.active = None
                 if image is not None:
                     # Only successful extractions enter the cache.  A failed
@@ -386,7 +532,80 @@ class IconService:
             return
         candidate = state.ready.popleft()
         state.active = candidate
-        self._work_queue.put(_IconWork(key, state, candidate))
+        is_path_specific = key.startswith("\0path:")
+        risky_path = _is_risky_shell_path(candidate.path)
+        generic = (
+            not is_path_specific
+            or risky_path
+            or self._specific_circuit_open
+        )
+        work = _IconWork(
+            key,
+            state,
+            candidate,
+            generic=generic,
+            is_directory=key == "\0folder",
+        )
+        if not generic:
+            state.specific_candidate = candidate
+            state.specific_deadline = (
+                time.monotonic() + self._path_specific_timeout_seconds
+            )
+            self._callbacks_idle.notify_all()
+        (self._generic_queue if generic else self._specific_queue).put(work)
+
+    def _specific_watchdog_loop(self) -> None:
+        """Fallback stalled path-specific requests through the safe lane."""
+
+        while True:
+            with self._callbacks_idle:
+                if self._closed:
+                    return
+                pending = [
+                    (key, state, state.specific_candidate, state.specific_deadline)
+                    for key, state in self._states.items()
+                    if state.specific_candidate is not None
+                    and state.specific_deadline is not None
+                ]
+                if not pending:
+                    self._callbacks_idle.wait()
+                    continue
+                now = time.monotonic()
+                nearest = min(
+                    deadline for _key, _state, _candidate, deadline in pending
+                )
+                if nearest > now:
+                    self._callbacks_idle.wait(nearest - now)
+                    continue
+
+                for key, state, candidate, deadline in pending:
+                    if (
+                        candidate is None
+                        or deadline is None
+                        or deadline > now
+                        or self._states.get(key) is not state
+                        or state.active is not candidate
+                        or state.specific_candidate is not candidate
+                    ):
+                        continue
+                    fallback = _IconCandidate(
+                        candidate.path,
+                        candidate.identity,
+                        candidate.attempt,
+                    )
+                    state.active = fallback
+                    state.specific_candidate = None
+                    state.specific_deadline = None
+                    self._specific_circuit_open = True
+                    self._generic_queue.put(
+                        _IconWork(
+                            key,
+                            state,
+                            fallback,
+                            generic=True,
+                            is_directory=False,
+                        )
+                    )
 
     def _schedule_retry_locked(
         self,
@@ -433,6 +652,9 @@ class IconService:
         state.callbacks.clear()
         state.active = None
         state.retry_timers.clear()
+        state.specific_candidate = None
+        state.specific_deadline = None
+        self._callbacks_idle.notify_all()
 
     def _deliver_callbacks(
         self,
@@ -510,17 +732,21 @@ class IconService:
                 )
                 for key, state in tuple(self._states.items()):
                     self._drop_state_locked(key, state)
+                self._callbacks_idle.notify_all()
 
         if first_close:
             for timer in timers:
                 timer.cancel()
-            while True:
-                try:
-                    self._work_queue.get_nowait()
-                except queue.Empty:
-                    break
-            for _worker in self._workers:
-                self._work_queue.put(None)
+            for work_queue in (self._generic_queue, self._specific_queue):
+                while True:
+                    try:
+                        work_queue.get_nowait()
+                    except queue.Empty:
+                        break
+            for _worker in self._workers[:-1]:
+                self._generic_queue.put(None)
+            if self._workers:
+                self._specific_queue.put(None)
 
         for worker in self._workers:
             if worker is current_thread:
@@ -529,6 +755,12 @@ class IconService:
             if remaining == 0:
                 break
             worker.join(remaining)
+
+        watchdog = self._specific_watchdog
+        if watchdog is not None and watchdog is not current_thread:
+            remaining = self._remaining_timeout(deadline)
+            if remaining != 0:
+                watchdog.join(remaining)
 
         current_ident = threading.get_ident()
         with self._callbacks_idle:
@@ -543,6 +775,10 @@ class IconService:
         return all(
             worker is current_thread or not worker.is_alive()
             for worker in self._workers
+        ) and (
+            watchdog is None
+            or watchdog is current_thread
+            or not watchdog.is_alive()
         )
 
     @staticmethod
@@ -557,12 +793,37 @@ class IconService:
     def __exit__(self, *args: object) -> None:
         self.close()
 
-    def _extract(self, path: str) -> IconImage | None:
+    def _extract(
+        self,
+        path: str,
+        *,
+        generic: bool,
+        is_directory: bool,
+    ) -> IconImage | None:
         try:
             api = self._api
-            return None if api is None else api.extract(path, self._size)  # type: ignore[union-attr]
+            if api is None:
+                return None
+            generic_extract = getattr(api, "extract_generic", None)
+            if generic and callable(generic_extract):
+                image = generic_extract(
+                    path,
+                    self._size,
+                    is_directory=is_directory,
+                )
+            else:
+                image = api.extract(path, self._size)  # type: ignore[union-attr]
+            return image if image is not None and _has_visible_alpha(image) else None
         except Exception:
             return None
+
+
+def _is_risky_shell_path(path: str) -> bool:
+    normalized = path.strip().replace("/", "\\")
+    return (
+        normalized.startswith("\\\\")
+        or normalized.lower().startswith(("http:\\", "https:\\"))
+    )
 
 
 __all__ = ["IconImage", "IconService", "icon_key"]

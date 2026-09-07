@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import math
 import ntpath
 import tkinter as tk
 import tkinter.font as tkfont
@@ -11,11 +12,18 @@ from tkinter import filedialog, messagebox
 from urllib.parse import urlsplit
 
 import customtkinter as ctk
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 
 from .. import __author__, __version__
 from ..models import LauncherConfig, LauncherItem, normalize_web_url
 from ..services.hotkeys import describe_hotkey_conflict_risk
-from ..services.monitor import NativeMonitorService, Rect, Size, center_window_in_work_area
+from ..services.monitor import (
+    MonitorContext,
+    NativeMonitorService,
+    Rect,
+    Size,
+    center_window_in_work_area,
+)
 from .dialogs import TextInputDialog, ask_display_name, position_geometry
 from .theme import (
     ACCENT,
@@ -92,6 +100,7 @@ class SettingsActions:
     import_config: Callable[[], bool] | None = None
     export_config: Callable[[], bool] | None = None
     copy_diagnostics: Callable[[], bool] | None = None
+    shutdown: Callable[[], None] | None = None
 
 
 class SettingsWindow(ctk.CTkToplevel):
@@ -101,6 +110,7 @@ class SettingsWindow(ctk.CTkToplevel):
         super().__init__(root)
         self.withdraw()
         self._actions = actions
+        self._shown = False
         self._refreshing = False
         self._active_page = "items"
         self._compact = False
@@ -111,6 +121,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._item_action_buttons: list[ctk.CTkButton] = []
         self._items_signature: tuple[object, ...] | None = None
         self._resize_after_id: str | None = None
+        self._prepared_monitor_signature: tuple[object, ...] | None = None
         self._pages: dict[str, ctk.CTkFrame] = {}
         self._page_headers: dict[str, ctk.CTkFrame] = {}
         self._page_subtitles: dict[str, ctk.CTkLabel] = {}
@@ -121,7 +132,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.minsize(320, 200)
         self.resizable(True, True)
         self.configure(fg_color=BG)
-        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+        self.protocol("WM_DELETE_WINDOW", self.hide)
         self.grid_columnconfigure(0, minsize=SIDEBAR_WIDTH)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -143,7 +154,7 @@ class SettingsWindow(ctk.CTkToplevel):
             lambda event: self._cycle_keyboard_focus(event, reverse=True),
             add="+",
         )
-        self.bind("<Escape>", lambda _event: self.withdraw(), add="+")
+        self.bind("<Escape>", lambda _event: self.hide(), add="+")
         self.bind("<Control-Key-1>", lambda _event: self._select_page("items"), add="+")
         self.bind(
             "<Control-Key-2>",
@@ -270,6 +281,7 @@ class SettingsWindow(ctk.CTkToplevel):
                     self._import_button,
                     self._export_button,
                     self._diagnostics_button,
+                    self._exit_button,
                 )
             )
 
@@ -1005,10 +1017,53 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._diagnostics_feedback.pack(side="left", padx=(10, 0), fill="x", expand=True)
 
+        exit_card = self._settings_card(
+            scroll,
+            row=3,
+            title="QuickAccess 종료",
+            description="트레이와 전역 단축키를 해제하고 프로그램을 완전히 종료합니다.",
+        )
+        self._exit_card = exit_card
+        self._exit_button = ctk.CTkButton(
+            exit_card,
+            text="프로그램 종료",
+            width=116,
+            height=34,
+            corner_radius=9,
+            fg_color=DANGER,
+            hover_color=DANGER_HOVER,
+            text_color="white",
+            font=font(10, "bold"),
+            state="normal" if self._actions.shutdown is not None else "disabled",
+            command=self._request_shutdown,
+        )
+        self._exit_button.grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            padx=18,
+            pady=16,
+            sticky="e",
+        )
+        self._enable_keyboard_button(self._exit_button)
+
     @staticmethod
     def _app_info_text(*, ultra_compact: bool) -> str:
         separator = "\n" if ultra_compact else "  ·  "
         return f"Version {__version__}{separator}만든 사람 {__author__}"
+
+    def _request_shutdown(self) -> None:
+        callback = self._actions.shutdown
+        if callback is None:
+            return
+        if not messagebox.askyesno(
+            "QuickAccess 종료",
+            "QuickAccess를 완전히 종료할까요?",
+            parent=self,
+        ):
+            return
+        self.hide()
+        self.after_idle(callback)
 
     def _settings_card(
         self,
@@ -1141,58 +1196,107 @@ class SettingsWindow(ctk.CTkToplevel):
         except tk.TclError:
             return
 
-    def _center_on_first_show(self) -> None:
-        self.update_idletasks()
+    def _show_monitor_context(self) -> MonitorContext:
+        """Resolve the target display once for an entire show operation."""
+
         try:
             cursor = self._monitor.get_cursor_position()
+            getter = getattr(self._monitor, "get_monitor_context", None)
+            if callable(getter):
+                return getter(cursor)
             work_area = self._monitor.get_monitor_work_area(cursor)
-            scale = max(0.1, self._get_window_scaling())
-            logical_width, logical_height = settings_dimensions(
-                work_area.width,
-                work_area.height,
-                scale,
-            )
-            self._apply_compact_layout(logical_width)
-            rendered = Size(
-                self._apply_window_scaling(logical_width),
-                self._apply_window_scaling(logical_height),
-            )
-            position = center_window_in_work_area(rendered, work_area)
-            # CustomTkinter temporarily locks native min/max bounds during a
-            # per-monitor DPI transition.  This window is moved
-            # programmatically (never dragged here), so restore its scaled
-            # constraints before applying the requested geometry.
-            self.minsize(min(320, logical_width), min(200, logical_height))
-            self._set_scaled_min_max()
-            self.geometry(
-                f"{logical_width}x{logical_height}"
-                f"{position_geometry(position.x, position.y)}"
+            return MonitorContext(
+                identifier=(
+                    f"work-area:{work_area.left}:{work_area.top}:"
+                    f"{work_area.right}:{work_area.bottom}"
+                ),
+                bounds=work_area,
+                work_area=work_area,
+                scale=None,
             )
         except Exception:
-            scale = max(0.1, self._get_window_scaling())
             fallback_area = Rect(
                 0,
                 0,
-                self.winfo_screenwidth(),
+                max(1, self.winfo_screenwidth()),
                 max(1, self.winfo_screenheight() - 48),
             )
-            logical_width, logical_height = settings_dimensions(
-                fallback_area.width,
-                fallback_area.height,
-                scale,
+            return MonitorContext(
+                identifier="fallback-primary",
+                bounds=fallback_area,
+                work_area=fallback_area,
+                scale=None,
             )
-            self._apply_compact_layout(logical_width)
-            rendered = Size(
-                self._apply_window_scaling(logical_width),
-                self._apply_window_scaling(logical_height),
-            )
-            position = center_window_in_work_area(rendered, fallback_area)
-            self.minsize(min(320, logical_width), min(200, logical_height))
+
+    def _synchronize_dpi_scale(self, target_dpi_scale: float | None) -> float:
+        """Apply known monitor DPI while the settings HWND is still hidden."""
+
+        if target_dpi_scale is None:
+            return max(0.1, self._get_window_scaling())
+        try:
+            target = float(target_dpi_scale)
+        except (TypeError, ValueError):
+            return max(0.1, self._get_window_scaling())
+        if not math.isfinite(target) or target <= 0:
+            return max(0.1, self._get_window_scaling())
+        current = ScalingTracker.window_dpi_scaling_dict.get(self)
+        if current is None or abs(float(current) - target) > 0.001:
+            ScalingTracker.window_dpi_scaling_dict[self] = target
+            ScalingTracker.update_scaling_callbacks_for_window(self)
             self._set_scaled_min_max()
-            self.geometry(
-                f"{logical_width}x{logical_height}"
-                f"{position_geometry(position.x, position.y)}"
+        return max(0.1, self._get_window_scaling())
+
+    def _prepare_hidden_geometry(self, context: MonitorContext) -> None:
+        """Stage scale, responsive layout and final geometry before mapping."""
+
+        work_area = context.work_area
+        try:
+            scale_key = None if context.scale is None else round(float(context.scale), 4)
+        except (TypeError, ValueError, OverflowError):
+            scale_key = None
+        signature = (
+            context.identifier,
+            work_area.left,
+            work_area.top,
+            work_area.right,
+            work_area.bottom,
+            scale_key,
+        )
+        if signature != self._prepared_monitor_signature:
+            # Assign the withdrawn HWND to the target display before updating
+            # CustomTkinter's scale tracker.  The first visible frame is then
+            # already rendered at the destination DPI.
+            tk.Toplevel.geometry(
+                self,
+                position_geometry(work_area.left + 8, work_area.top + 8),
             )
+            self.update_idletasks()
+
+        scale = self._synchronize_dpi_scale(context.scale)
+        logical_width, logical_height = settings_dimensions(
+            work_area.width,
+            work_area.height,
+            scale,
+        )
+        self._apply_compact_layout(logical_width)
+        rendered = Size(
+            self._apply_window_scaling(logical_width),
+            self._apply_window_scaling(logical_height),
+        )
+        position = center_window_in_work_area(rendered, work_area)
+        self.minsize(min(320, logical_width), min(200, logical_height))
+        self._set_scaled_min_max()
+        self.geometry(
+            f"{logical_width}x{logical_height}"
+            f"{position_geometry(position.x, position.y)}"
+        )
+        self.update_idletasks()
+        self._prepared_monitor_signature = signature
+
+    def _center_on_first_show(self) -> None:
+        """Compatibility wrapper used by older callers and UI diagnostics."""
+
+        self._prepare_hidden_geometry(self._show_monitor_context())
 
     def _apply_compact_layout(self, logical_width: int) -> None:
         compact = logical_width < 800
@@ -1351,6 +1455,16 @@ class SettingsWindow(ctk.CTkToplevel):
                 pady=(0, 12),
                 sticky="w",
             )
+            self._exit_button.configure(width=1 if ultra_compact else 116)
+            self._exit_button.grid_configure(
+                row=2,
+                column=0,
+                columnspan=2,
+                rowspan=1,
+                padx=12,
+                pady=(0, 12),
+                sticky="ew",
+            )
             self._app_info_details.configure(
                 text=self._app_info_text(ultra_compact=ultra_compact),
                 width=1 if ultra_compact else 120,
@@ -1486,6 +1600,16 @@ class SettingsWindow(ctk.CTkToplevel):
                 columnspan=1,
                 rowspan=2,
                 padx=22,
+                pady=16,
+                sticky="e",
+            )
+            self._exit_button.configure(width=116)
+            self._exit_button.grid_configure(
+                row=0,
+                column=1,
+                columnspan=1,
+                rowspan=2,
+                padx=18,
                 pady=16,
                 sticky="e",
             )
@@ -1634,22 +1758,31 @@ class SettingsWindow(ctk.CTkToplevel):
         )
 
     def show(self) -> None:
-        self.refresh()
-        self.deiconify()
-        self.lift()
-        self.focus_force()
-        self.after_idle(self._center_on_first_show)
-        self.after(80, lambda: self._settle_dpi(2))
-
-    def _settle_dpi(self, attempts_remaining: int) -> None:
         try:
-            if not self.winfo_viewable():
+            state = str(self.state())
+            if self._shown:
+                # A second tray click should only raise the existing window;
+                # it must not chase a cursor that moved to another monitor.
+                self.refresh()
+                if state != "normal":
+                    self.deiconify()
+                self.lift()
+                self.focus_force()
                 return
-            self._center_on_first_show()
-            if attempts_remaining:
-                self.after(80, lambda: self._settle_dpi(attempts_remaining - 1))
         except tk.TclError:
             return
+
+        context = self._show_monitor_context()
+        self._prepare_hidden_geometry(context)
+        self.refresh()
+        self.deiconify()
+        self._shown = True
+        self.lift()
+        self.focus_force()
+
+    def hide(self) -> None:
+        self._shown = False
+        self.withdraw()
 
     def refresh(self) -> None:
         self._refreshing = True

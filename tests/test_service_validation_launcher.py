@@ -9,6 +9,24 @@ from quickaccess.services.validation import PathStatus, PathValidationService
 
 
 class PathValidationTests(unittest.TestCase):
+    def test_worker_count_requires_a_positive_integer(self) -> None:
+        for invalid in (True, False, 0, -1, 0.5, "4"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                PathValidationService(lambda _result: None, max_workers=invalid)  # type: ignore[arg-type]
+
+    def test_timeout_values_must_be_finite_and_positive(self) -> None:
+        invalid_values = (float("nan"), float("inf"), float("-inf"), 0.0, -1.0)
+        for value in invalid_values:
+            with self.subTest(timeout_seconds=value):
+                with self.assertRaises(ValueError):
+                    PathValidationService(lambda _result: None, timeout_seconds=value)
+            with self.subTest(queue_timeout_seconds=value):
+                with self.assertRaises(ValueError):
+                    PathValidationService(
+                        lambda _result: None,
+                        queue_timeout_seconds=value,
+                    )
+
     def test_valid_missing_and_error_results(self) -> None:
         results = []
         ready = threading.Event()
@@ -97,9 +115,9 @@ class PathValidationTests(unittest.TestCase):
             release_old.set()
             validator.close()
 
-    def test_blocked_paths_never_exceed_worker_limit(self) -> None:
+    def test_blocked_calls_and_replacements_remain_strictly_bounded(self) -> None:
         release = threading.Event()
-        all_timed_out = threading.Event()
+        initial_timeouts = threading.Event()
         started_lock = threading.Lock()
         started = 0
         received = []
@@ -113,8 +131,8 @@ class PathValidationTests(unittest.TestCase):
 
         def callback(result: object) -> None:
             received.append(result)
-            if len(received) == 20:
-                all_timed_out.set()
+            if len(received) >= 3:
+                initial_timeouts.set()
 
         validator = PathValidationService(
             callback,
@@ -125,10 +143,102 @@ class PathValidationTests(unittest.TestCase):
         try:
             for index in range(20):
                 validator.validate(str(index), rf"\\server\offline\{index}")
-            self.assertTrue(all_timed_out.wait(1))
+            self.assertTrue(initial_timeouts.wait(1))
+            time.sleep(0.1)
             with started_lock:
-                self.assertLessEqual(started, 3)
+                # Three baseline calls plus at most three abandoned-call
+                # replacements can be inside an uninterruptible OS call.
+                self.assertLessEqual(started, 6)
             self.assertTrue(all(result.status is PathStatus.TIMEOUT for result in received))
+        finally:
+            release.set()
+            validator.close()
+
+    def test_queued_local_path_is_probed_after_blocked_worker_times_out(self) -> None:
+        release = threading.Event()
+        slow_started = threading.Event()
+        fast_probed = threading.Event()
+        ready = threading.Event()
+        received = []
+
+        def exists(path: str) -> bool:
+            if path.startswith(r"\\server"):
+                slow_started.set()
+                release.wait(2)
+                return True
+            fast_probed.set()
+            return True
+
+        def callback(result: object) -> None:
+            received.append(result)
+            if len(received) == 2:
+                ready.set()
+
+        validator = PathValidationService(
+            callback,
+            timeout_seconds=0.05,
+            exists=exists,
+            max_workers=1,
+        )
+        try:
+            validator.validate("slow", r"\\server\offline")
+            self.assertTrue(slow_started.wait(1))
+            validator.validate("fast", r"C:\ready.txt")
+
+            self.assertTrue(ready.wait(1))
+            statuses = {result.item_id: result.status for result in received}
+            self.assertEqual(PathStatus.TIMEOUT, statuses["slow"])
+            self.assertEqual(PathStatus.VALID, statuses["fast"])
+            self.assertTrue(fast_probed.is_set())
+        finally:
+            release.set()
+            validator.close()
+
+    def test_saturated_replacement_cap_returns_queued_unknown_warning(self) -> None:
+        release = threading.Event()
+        first_started = threading.Event()
+        second_started = threading.Event()
+        local_ready = threading.Event()
+        calls: list[str] = []
+        received = []
+
+        def exists(path: str) -> bool:
+            calls.append(path)
+            if path.endswith("one"):
+                first_started.set()
+            elif path.endswith("two"):
+                second_started.set()
+            release.wait(2)
+            return True
+
+        def callback(result: object) -> None:
+            received.append(result)
+            if result.item_id == "local":
+                local_ready.set()
+
+        validator = PathValidationService(
+            callback,
+            timeout_seconds=0.05,
+            queue_timeout_seconds=0.15,
+            exists=exists,
+            max_workers=1,
+        )
+        try:
+            validator.validate("one", r"\\server\one")
+            self.assertTrue(first_started.wait(1))
+            validator.validate("two", r"\\server\two")
+            self.assertTrue(second_started.wait(1))
+
+            # The only replacement is now stuck too.  A later local request
+            # must resolve to an unknown warning rather than remain pending.
+            validator.validate("local", r"C:\ready.txt")
+            self.assertTrue(local_ready.wait(1))
+            local = next(result for result in received if result.item_id == "local")
+            self.assertEqual(PathStatus.TIMEOUT, local.status)
+            self.assertFalse(local.is_broken)
+            self.assertIn("could not start", local.error or "")
+            self.assertNotIn(r"C:\ready.txt", calls)
+            self.assertLessEqual(len(validator._workers), 2)
         finally:
             release.set()
             validator.close()

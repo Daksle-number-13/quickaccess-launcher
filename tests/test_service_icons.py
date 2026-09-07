@@ -5,7 +5,12 @@ import time
 import unittest
 from collections.abc import Callable
 
-from quickaccess.services.icons import IconImage, IconService, icon_key
+from quickaccess.services.icons import (
+    IconImage,
+    IconService,
+    _recover_legacy_alpha,
+    icon_key,
+)
 
 
 class _FakeIconApi:
@@ -74,6 +79,29 @@ class IconKeyTests(unittest.TestCase):
     def test_web_links_share_a_non_file_icon_key(self) -> None:
         self.assertEqual("\0url", icon_key("https://example.com", "url"))
         self.assertNotEqual(icon_key("https://example.com", "url"), icon_key("index", "file"))
+
+
+class LegacyAlphaTests(unittest.TestCase):
+    def test_black_foreground_is_recovered_from_mask_renders(self) -> None:
+        # First pixel is opaque black; second pixel is transparent.  Both are
+        # indistinguishable in a transparent-black render without the white
+        # comparison image.
+        black = bytes((0, 0, 0, 0, 0, 0, 0, 0))
+        white = bytes((0, 0, 0, 255, 255, 255, 255, 255))
+
+        recovered = _recover_legacy_alpha(black, white)
+
+        self.assertEqual(bytes((0, 0, 0, 255)), recovered[:4])
+        self.assertEqual(bytes((0, 0, 0, 0)), recovered[4:])
+
+    def test_fractional_coverage_is_unpremultiplied(self) -> None:
+        black = bytes((0, 0, 128, 0))
+        white = bytes((127, 127, 255, 255))
+
+        recovered = _recover_legacy_alpha(black, white)
+
+        self.assertEqual(128, recovered[3])
+        self.assertGreaterEqual(recovered[2], 254)
 
 
 class IconServiceTests(unittest.TestCase):
@@ -239,6 +267,149 @@ class IconServiceTests(unittest.TestCase):
 
         self.assertEqual(3, len(api.calls))
         self.assertIsNone(service.get_cached("file"))
+
+    def test_fully_transparent_result_is_not_success_cached(self) -> None:
+        class TransparentApi:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def extract(self, path: str, size: int) -> IconImage:
+                self.calls += 1
+                return IconImage(size, size, b"\0" * size * size * 4)
+
+        api = TransparentApi()
+        service = self.make_service(api=api, retry_delays=())
+        callback_called = threading.Event()
+
+        service.request("file", r"C:\a.txt", lambda *_args: callback_called.set())
+        _wait_until_settled(service, "file")
+        service.request("file", r"C:\a.txt")
+        _wait_until_settled(service, "file")
+
+        self.assertEqual(2, api.calls)
+        self.assertIsNone(service.get_cached("file"))
+        self.assertFalse(callback_called.is_set())
+
+    def test_blocked_specific_icon_does_not_delay_generic_icon(self) -> None:
+        specific_started = threading.Event()
+        release_specific = threading.Event()
+
+        class SplitApi:
+            def extract(self, path: str, size: int) -> IconImage | None:
+                specific_started.set()
+                release_specific.wait(2.0)
+                return None
+
+            def extract_generic(
+                self,
+                path: str,
+                size: int,
+                *,
+                is_directory: bool = False,
+            ) -> IconImage:
+                return IconImage(size, size, b"\x11\x22\x33\xff" * size * size)
+
+        service = self.make_service(api=SplitApi(), max_workers=2, retry_delays=())
+        generic_ready = threading.Event()
+        service.request(
+            icon_key(r"C:\Apps\Blocked.exe", "file"),
+            r"C:\Apps\Blocked.exe",
+        )
+        self.assertTrue(specific_started.wait(1.0))
+
+        service.request(".txt", r"C:\Notes\ready.txt", lambda *_args: generic_ready.set())
+
+        try:
+            self.assertTrue(generic_ready.wait(0.5))
+            self.assertIsNotNone(service.get_cached(".txt"))
+        finally:
+            release_specific.set()
+
+    def test_stalled_specific_icon_falls_back_and_opens_circuit(self) -> None:
+        specific_started = threading.Event()
+        release_specific = threading.Event()
+
+        class CircuitApi:
+            def __init__(self) -> None:
+                self.specific_calls: list[str] = []
+                self.generic_calls: list[str] = []
+
+            def extract(self, path: str, size: int) -> IconImage | None:
+                self.specific_calls.append(path)
+                specific_started.set()
+                release_specific.wait(2.0)
+                return None
+
+            def extract_generic(
+                self,
+                path: str,
+                size: int,
+                *,
+                is_directory: bool = False,
+            ) -> IconImage:
+                self.generic_calls.append(path)
+                return IconImage(size, size, b"\x11\x22\x33\xff" * size * size)
+
+        api = CircuitApi()
+        service = self.make_service(
+            api=api,
+            max_workers=2,
+            retry_delays=(),
+            path_specific_timeout_seconds=0.05,
+        )
+        first_ready = threading.Event()
+        second_ready = threading.Event()
+        first = r"C:\Apps\Blocked.exe"
+        second = r"C:\Apps\Later.exe"
+        service.request(icon_key(first, "file"), first, lambda *_args: first_ready.set())
+        self.assertTrue(specific_started.wait(1.0))
+
+        try:
+            # The same request receives a safe type icon even though its
+            # native shell call has still not returned.
+            self.assertTrue(first_ready.wait(1.0))
+            service.request(
+                icon_key(second, "file"),
+                second,
+                lambda *_args: second_ready.set(),
+            )
+            self.assertTrue(second_ready.wait(0.5))
+            self.assertEqual([first], api.specific_calls)
+            self.assertEqual([first, second], api.generic_calls)
+            self.assertEqual(3, len(service._workers))
+        finally:
+            release_specific.set()
+
+    def test_unc_executable_uses_path_independent_generic_lookup(self) -> None:
+        class RecordingSplitApi:
+            def __init__(self) -> None:
+                self.specific_calls: list[str] = []
+                self.generic_calls: list[tuple[str, bool]] = []
+
+            def extract(self, path: str, size: int) -> IconImage | None:
+                self.specific_calls.append(path)
+                return None
+
+            def extract_generic(
+                self,
+                path: str,
+                size: int,
+                *,
+                is_directory: bool = False,
+            ) -> IconImage:
+                self.generic_calls.append((path, is_directory))
+                return IconImage(size, size, b"\x11\x22\x33\xff" * size * size)
+
+        api = RecordingSplitApi()
+        service = self.make_service(api=api, retry_delays=())
+        ready = threading.Event()
+        path = r"\\server\offline\tool.exe"
+
+        service.request(icon_key(path, "file"), path, lambda *_args: ready.set())
+
+        self.assertTrue(ready.wait(1.0))
+        self.assertEqual([], api.specific_calls)
+        self.assertEqual([(path, False)], api.generic_calls)
 
     def test_close_cancels_pending_retry_timer(self) -> None:
         api = _FakeIconApi(raises=RuntimeError("shell unavailable"))

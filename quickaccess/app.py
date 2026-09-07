@@ -9,12 +9,14 @@ import logging
 import ntpath
 import os
 from pathlib import Path
+import queue
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from typing import Any
+from typing import Any, Callable
 
 import customtkinter as ctk
 from PIL import Image
@@ -65,8 +67,13 @@ from .services.startup import (
     StartupRegistrationStatus,
     build_startup_command,
 )
-from .services.tray import TrayService
-from .services.update_check import DEFAULT_REPO, UpdateCheckResult, check_for_update
+from .services.tray import TrayService, TrayState
+from .services.update_check import (
+    DEFAULT_REPO,
+    UpdateCheckResult,
+    UpdateCheckStatus,
+    check_for_update,
+)
 from .services.validation import PathStatus, PathValidationService, ValidationResult
 from .storage import ConfigStore, LoadResult
 from .ui.dialogs import TextInputDialog, ToastManager, ask_display_name
@@ -78,7 +85,10 @@ LOGGER = logging.getLogger(__name__)
 MUTEX_NAME = "QuickAccessLauncher-2D6B7C9A-0145-4D80-A84C-8297515C16B2"
 PUMP_INTERVAL_MS = 8
 MONITOR_REFRESH_INTERVAL_MS = 1000
+INTEGRATION_HEALTH_INTERVAL_MS = 2000
+INTEGRATION_RESTART_BACKOFF_SECONDS = (2.0, 5.0, 15.0)
 QUICK_ADD_TIMEOUT_MS = 8000
+MAX_CONCURRENT_QUICK_ADDS = 2
 MAX_CONCURRENT_LAUNCHES = 4
 MAX_IMPORT_BYTES = 2 * 1024 * 1024
 CTK_APPEARANCE_MODES = {
@@ -155,6 +165,7 @@ class QuickAccessApp:
         self._quick_add_inflight = False
         self._quick_add_generation = 0
         self._quick_add_timeout_after: str | None = None
+        self._quick_add_slots = threading.BoundedSemaphore(MAX_CONCURRENT_QUICK_ADDS)
         self._launch_inflight: set[str] = set()
         self._launch_slots = threading.BoundedSemaphore(MAX_CONCURRENT_LAUNCHES)
         self._popup_refresh_after: str | None = None
@@ -165,6 +176,14 @@ class QuickAccessApp:
         self._update_check_after: str | None = None
         self._update_check_generation = 0
         self._update_check_inflight_generations: set[int] = set()
+        self._integration_health_after: str | None = None
+        self._integration_health_results: queue.SimpleQueue[
+            tuple[str, bool, str | None]
+        ] = queue.SimpleQueue()
+        self._integration_recovery_inflight: set[str] = set()
+        self._integration_recovery_attempts = {"hotkeys": 0, "tray": 0}
+        self._integration_retry_not_before = {"hotkeys": 0.0, "tray": 0.0}
+        self._integration_outage_notified = False
 
         self.root.withdraw()
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
@@ -200,12 +219,18 @@ class QuickAccessApp:
                 raise RuntimeError(error or "트레이 아이콘 준비 시간이 초과되었습니다")
         except Exception as error:
             LOGGER.exception("Unable to start system tray")
+            try:
+                self.tray.stop(timeout=0.5)
+            except Exception:
+                LOGGER.exception("Unable to clean up failed system tray startup")
             self.toast.show(f"시스템 트레이를 시작하지 못했습니다: {error}", kind="error")
             if self.smoke_test:
                 raise RuntimeError("smoke test could not start the system tray") from error
 
         self.root.after(PUMP_INTERVAL_MS, self._drain_commands)
         self._schedule_monitor_refresh()
+        if not self.smoke_test:
+            self._schedule_integration_health_check()
         self._validate_all_paths()
         self._request_all_icons()
         if not self.smoke_test and self.config.check_updates:
@@ -352,6 +377,196 @@ class QuickAccessApp:
                     duration_ms=6500,
                 )
             return False
+
+    def _hotkey_service_healthy(self) -> bool:
+        try:
+            if not bool(self.hotkeys.running):
+                return False
+            bindings = self.hotkeys.bindings
+            return "panel" in bindings and "quick_add" in bindings
+        except Exception:
+            return False
+
+    def _tray_service_healthy(self) -> bool:
+        try:
+            healthy = getattr(self.tray, "healthy", None)
+            if healthy is not None:
+                return bool(healthy)
+            return self.tray.state is TrayState.RUNNING
+        except Exception:
+            return False
+
+    def _tray_service_starting(self) -> bool:
+        try:
+            return self.tray.state is TrayState.STARTING
+        except Exception:
+            return False
+
+    def _schedule_integration_health_check(
+        self,
+        delay_ms: int = INTEGRATION_HEALTH_INTERVAL_MS,
+    ) -> None:
+        if self._stopping or self._integration_health_after is not None:
+            return
+        self._integration_health_after = self.root.after(
+            max(0, int(delay_ms)),
+            self._poll_integration_health,
+        )
+
+    def _cancel_integration_health_check(self) -> None:
+        after_id = self._integration_health_after
+        self._integration_health_after = None
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _poll_integration_health(self) -> None:
+        self._integration_health_after = None
+        if self._stopping:
+            return
+
+        self._apply_integration_recovery_results()
+        hotkeys_healthy = self._hotkey_service_healthy()
+        tray_healthy = self._tray_service_healthy()
+        tray_starting = self._tray_service_starting()
+
+        for name, healthy in (
+            ("hotkeys", hotkeys_healthy),
+            ("tray", tray_healthy),
+        ):
+            if healthy and name not in self._integration_recovery_inflight:
+                self._integration_recovery_attempts[name] = 0
+                self._integration_retry_not_before[name] = 0.0
+
+        if not hotkeys_healthy and not tray_healthy and not tray_starting:
+            if not self._integration_outage_notified:
+                self._integration_outage_notified = True
+                LOGGER.error("Both tray and global hotkey integrations are unavailable")
+                self.open_settings()
+                self.toast.show(
+                    "트레이와 전역 단축키가 중단되었습니다.\n"
+                    "자동 복구를 시도합니다. 앱 정보에서 프로그램을 종료할 수도 있습니다.",
+                    kind="error",
+                    duration_ms=7500,
+                )
+        elif hotkeys_healthy and tray_healthy:
+            self._integration_outage_notified = False
+
+        now = time.monotonic()
+        if not hotkeys_healthy:
+            self._start_integration_recovery_if_due("hotkeys", now)
+        if not tray_healthy and not tray_starting:
+            self._start_integration_recovery_if_due("tray", now)
+
+        self._schedule_integration_health_check()
+
+    def _apply_integration_recovery_results(self) -> None:
+        max_attempts = len(INTEGRATION_RESTART_BACKOFF_SECONDS)
+        while True:
+            try:
+                name, succeeded, error = self._integration_health_results.get_nowait()
+            except queue.Empty:
+                return
+            self._integration_recovery_inflight.discard(name)
+            attempts = self._integration_recovery_attempts.get(name, 0)
+            if succeeded:
+                self._integration_recovery_attempts[name] = 0
+                self._integration_retry_not_before[name] = 0.0
+                label = "전역 단축키" if name == "hotkeys" else "시스템 트레이"
+                self.toast.show(f"{label}를 자동으로 복구했습니다.", kind="success")
+                continue
+
+            delay_index = min(max(0, attempts - 1), max_attempts - 1)
+            self._integration_retry_not_before[name] = (
+                time.monotonic() + INTEGRATION_RESTART_BACKOFF_SECONDS[delay_index]
+            )
+            LOGGER.warning(
+                "Integration recovery failed (%s, attempt %d): %s",
+                name,
+                attempts,
+                error or "unknown error",
+            )
+            if attempts >= max_attempts:
+                label = "전역 단축키" if name == "hotkeys" else "시스템 트레이"
+                self.toast.show(
+                    f"{label} 자동 복구에 실패했습니다. 프로그램을 종료한 뒤 다시 실행해 주세요.",
+                    kind="warning",
+                    duration_ms=6500,
+                )
+
+    def _start_integration_recovery_if_due(self, name: str, now: float) -> None:
+        if name in self._integration_recovery_inflight:
+            return
+        max_attempts = len(INTEGRATION_RESTART_BACKOFF_SECONDS)
+        attempts = self._integration_recovery_attempts.get(name, 0)
+        if attempts >= max_attempts:
+            return
+        if now < self._integration_retry_not_before.get(name, 0.0):
+            return
+
+        self._integration_recovery_attempts[name] = attempts + 1
+        self._integration_recovery_inflight.add(name)
+        worker = threading.Thread(
+            target=self._recover_integration,
+            args=(name,),
+            name=f"QuickAccessRecovery-{name}",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception as error:
+            self._integration_health_results.put(
+                (name, False, f"{type(error).__name__}: {error}")
+            )
+
+    def _recover_integration(self, name: str) -> None:
+        if self._stopping:
+            return
+        succeeded = False
+        error_text: str | None = None
+        try:
+            if name == "hotkeys":
+                self.hotkeys.configure(
+                    {
+                        "panel": (self.config.hotkey, self._hotkey_open_panel),
+                        "quick_add": (
+                            self.config.quick_add_hotkey,
+                            self._hotkey_quick_add,
+                        ),
+                    }
+                )
+                succeeded = self._hotkey_service_healthy()
+            elif name == "tray":
+                self.tray.start()
+                succeeded = self.tray.wait_until_ready(timeout=1.5)
+                if not succeeded:
+                    detail = self.tray.last_error
+                    raise RuntimeError(
+                        detail or "트레이 아이콘 준비 시간이 초과되었습니다"
+                    )
+            else:
+                raise ValueError(f"unknown integration: {name}")
+        except Exception as error:
+            error_text = f"{type(error).__name__}: {error}"
+            if name == "tray":
+                try:
+                    self.tray.stop(timeout=0.5)
+                except Exception:
+                    LOGGER.exception("Unable to stop tray after recovery failure")
+        finally:
+            if self._stopping and succeeded:
+                try:
+                    if name == "hotkeys":
+                        self.hotkeys.stop()
+                    elif name == "tray":
+                        self.tray.stop(timeout=0.5)
+                except Exception:
+                    LOGGER.exception("Integration recovered during shutdown")
+                succeeded = False
+            self._integration_health_results.put((name, succeeded, error_text))
 
     def open_panel(self, cursor_position: tuple[int, int] | None = None) -> None:
         try:
@@ -609,6 +824,7 @@ class QuickAccessApp:
             import_config=self.import_config,
             export_config=self.export_config,
             copy_diagnostics=self.copy_diagnostics,
+            shutdown=self.shutdown,
         )
 
     def get_config(self) -> LauncherConfig:
@@ -646,6 +862,7 @@ class QuickAccessApp:
         )
         if not destination:
             return False
+
         try:
             write_portable_config(destination, self.config)
         except Exception as error:
@@ -1421,21 +1638,40 @@ class QuickAccessApp:
                 )
 
     def _begin_quick_add(self, explorer_hwnd: int | None) -> None:
-        if self._quick_add_inflight:
+        if self._stopping or self._quick_add_inflight:
+            return
+        if not self._quick_add_slots.acquire(blocking=False):
+            self.toast.show(
+                "이전 탐색기 응답을 기다리고 있습니다. 잠시 후 다시 시도해 주세요.",
+                kind="warning",
+            )
             return
         self._quick_add_inflight = True
         self._quick_add_generation += 1
         generation = self._quick_add_generation
-        self._quick_add_timeout_after = self.root.after(
-            QUICK_ADD_TIMEOUT_MS,
-            lambda: self._expire_quick_add(generation),
-        )
 
         def worker() -> None:
-            result = self.explorer.get_target(explorer_hwnd)
-            self._safe_publish(QuickAddResultCommand(result=(generation, result)))
+            try:
+                try:
+                    result = self.explorer.get_target(explorer_hwnd)
+                except Exception:
+                    LOGGER.exception("Unable to read the foreground Explorer window")
+                    result = ExplorerTargetResult(
+                        success=False,
+                        error="탐색기 항목을 읽지 못했습니다. 다시 시도해 주세요.",
+                    )
+                self._safe_publish(QuickAddResultCommand(result=(generation, result)))
+            finally:
+                # The watchdog only releases the UI wait. COM calls cannot be
+                # interrupted safely, so a timed-out worker keeps its slot until
+                # the actual call returns, bounding retries against a hung shell.
+                self._quick_add_slots.release()
 
         try:
+            self._quick_add_timeout_after = self.root.after(
+                QUICK_ADD_TIMEOUT_MS,
+                lambda: self._expire_quick_add(generation),
+            )
             threading.Thread(
                 target=worker,
                 name="QuickAccessExplorerQuickAdd",
@@ -1445,6 +1681,7 @@ class QuickAccessApp:
             self._cancel_quick_add_timeout()
             self._quick_add_inflight = False
             self._quick_add_generation += 1
+            self._quick_add_slots.release()
             raise
 
     def _expire_quick_add(self, generation: int) -> None:
@@ -1595,14 +1832,26 @@ class QuickAccessApp:
         self._update_check_inflight_generations.add(generation)
 
         def worker() -> None:
-            result = check_for_update(__version__)
+            try:
+                result = check_for_update(__version__)
+            except Exception:
+                LOGGER.exception("Update check worker failed")
+                result = UpdateCheckResult(
+                    available=False,
+                    status=UpdateCheckStatus.ERROR,
+                    error_reason="worker_error",
+                )
             self._safe_publish(UpdateAvailableCommand(result=(generation, result)))
 
-        threading.Thread(
-            target=worker,
-            name="QuickAccessUpdateCheck",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=worker,
+                name="QuickAccessUpdateCheck",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._update_check_inflight_generations.discard(generation)
+            LOGGER.exception("Unable to start update check worker")
 
     def _apply_update_check(self, result: object) -> None:
         generation = self._update_check_generation
@@ -1677,6 +1926,7 @@ class QuickAccessApp:
         self._stopping = True
         LOGGER.info("QuickAccess shutdown started")
         self._cancel_monitor_refresh()
+        self._cancel_integration_health_check()
         self._cancel_update_check_schedule()
         self._cancel_quick_add_timeout()
         try:
@@ -1742,16 +1992,28 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    configure_logging()
-    hooks = install_exception_hooks(chain=not getattr(sys, "frozen", False))
-    guard = SingleInstanceGuard(
-        f"{MUTEX_NAME}-Smoke" if args.smoke_test else MUTEX_NAME
-    )
+    logging_configured = False
+    hooks = None
+    guard = None
     root: ctk.CTk | None = None
     smoke_directory: tempfile.TemporaryDirectory[str] | None = None
+    smoke_completed = False
+    smoke_callback_failed = False
     try:
+        configure_logging()
+        logging_configured = True
+        hooks = install_exception_hooks(chain=not getattr(sys, "frozen", False))
+        guard = SingleInstanceGuard(
+            f"{MUTEX_NAME}-Smoke" if args.smoke_test else MUTEX_NAME
+        )
         require_windows()
         if not guard.acquire():
+            if args.smoke_test:
+                # A release smoke run must exercise this exact executable.
+                # Treat an overlapping/stale smoke owner as a failed gate
+                # instead of notifying it and falsely returning success.
+                LOGGER.error("Another QuickAccess smoke test is already running")
+                return 1
             request = (
                 InstanceRequest.OPEN_SETTINGS
                 if args.settings
@@ -1795,17 +2057,46 @@ def main(argv: list[str] | None = None) -> int:
             smoke_test=args.smoke_test,
             instance_guard=guard,
         )
+        if args.smoke_test:
+            def report_smoke_callback_error(exc_type, exc_value, traceback):
+                nonlocal smoke_callback_failed
+                smoke_callback_failed = True
+                LOGGER.error(
+                    "QuickAccess smoke-test Tk callback failed",
+                    exc_info=(exc_type, exc_value, traceback),
+                )
+                try:
+                    application.shutdown()
+                finally:
+                    # shutdown itself can fail; the failed gate must still
+                    # leave Tk's event loop without opening an error dialog.
+                    root.quit()
+
+            def finish_smoke_test():
+                nonlocal smoke_completed
+                application.shutdown()
+                smoke_completed = True
+
+            root.report_callback_exception = report_smoke_callback_error
         application.start()
         if args.settings:
             root.after(0, application.open_settings)
         if args.smoke_test:
-            root.after(2500, application.shutdown)
+            root.after(2500, finish_smoke_test)
         LOGGER.info("QuickAccess started")
         root.mainloop()
+        if args.smoke_test and (smoke_callback_failed or not smoke_completed):
+            LOGGER.error("QuickAccess smoke test did not complete successfully")
+            return 1
         return 0
     except Exception as error:
         LOGGER.exception("QuickAccess failed during startup")
-        _show_fatal_error(f"QuickAccess를 시작하지 못했습니다.\n\n{error}")
+        # A smoke test is an unattended release gate.  Showing a modal
+        # MessageBox on failure would leave CI/build scripts waiting forever
+        # instead of returning the non-zero result they need to reject the
+        # artifact.
+        if not args.smoke_test:
+            _show_fatal_error(f"QuickAccess를 시작하지 못했습니다.\n\n{error}")
         if root is not None:
             try:
                 root.destroy()
@@ -1813,11 +2104,26 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         return 1
     finally:
-        guard.close()
+        cleanup_steps: list[tuple[str, Callable[[], object]]] = []
+        if guard is not None:
+            cleanup_steps.append(("single-instance guard", guard.close))
         if smoke_directory is not None:
-            smoke_directory.cleanup()
-        hooks.restore()
-        close_logging()
+            cleanup_steps.append(("smoke directory", smoke_directory.cleanup))
+        if hooks is not None:
+            cleanup_steps.append(("exception hooks", hooks.restore))
+        if logging_configured:
+            cleanup_steps.append(("logging", close_logging))
+        for label, cleanup in cleanup_steps:
+            try:
+                cleanup()
+            except Exception:
+                # Every resource must get its own cleanup attempt.  In
+                # particular, a stale mutex must not prevent logging handlers
+                # or temporary smoke-test files from being released.
+                try:
+                    LOGGER.exception("QuickAccess %s cleanup failed", label)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
