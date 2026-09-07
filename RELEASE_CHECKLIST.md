@@ -18,13 +18,15 @@
 - [x] 최종 PDF A4 8쪽 전체 PNG 렌더 검수 — 글자 잘림·겹침·이미지 왜곡 없음
 - [x] 라이선스 ZIP 48개 항목 생성 및 EXE·ZIP hash와 schema 2 manifest 일치
 - [x] PowerShell 5.1에서 빌드 실패·시간 초과·자식 정리·서명 거부 13개 실제 행동 검증
-- [ ] 깨끗한 `v2.0.2` 태그에서 최종 release-eligible 빌드
-- [ ] GitHub Release에 EXE·manifest·라이선스 ZIP 3개 업로드 후 재다운로드 hash 확인
+- [x] 깨끗한 `v2.0.2` 태그에서 최종 release-eligible 빌드
+- [x] [GitHub 자동 검사](https://github.com/Daksle-number-13/quickaccess-launcher/actions/runs/34095033329) — 테스트·의존성·one-file 빌드·실행 검사 통과
+- [x] GitHub Release에 EXE·manifest·라이선스 ZIP 3개 업로드 후 재다운로드 hash 확인
 
-태그 전 검증 빌드는 `2.0.2.0`, Authenticode `NotSigned`입니다. 최종 크기와
-SHA-256은 깨끗한 태그 빌드 뒤 `QuickAccess.release.json`과 GitHub Release 설명에
-기록합니다. 향후 서명하면 서명된 파일 기준으로 해시와 스모크 테스트를 다시
-확인해야 합니다.
+최종 빌드는 `2.0.2.0`, Authenticode `NotSigned`이며, 소스 커밋은
+`1f969311fe9ed96c577a6c2d17282815426cb6ef`입니다. EXE 크기는 15,345,702바이트,
+SHA-256은 `DF8FA9B9E9892924B96B714C19DD19586F64DA3BE956B5B344390A27EB55783B`입니다.
+이 값은 `QuickAccess.release.json` 및 [공개 릴리스](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v2.0.2)와 일치합니다.
+향후 서명하면 서명된 파일 기준으로 해시와 스모크 테스트를 다시 확인해야 합니다.
 
 ## 성능 게이트
 
@@ -84,7 +86,7 @@ SHA-256은 깨끗한 태그 빌드 뒤 `QuickAccess.release.json`과 GitHub Rele
 - [ ] `Ctrl+Space` 등 알려진 충돌 조합 입력 시 설정 화면에 경고 문구 표시
 - [ ] 회사 EDR/백신에 의한 격리 여부 확인
 - [ ] 인증서를 사용하는 경우 Authenticode 서명·타임스탬프 적용 후 재검증
-- [ ] v2.0.2 미서명 공개 릴리스에 `NotSigned` 안내와 SHA-256 값 명시
+- [x] v2.0.2 미서명 공개 릴리스에 `NotSigned` 안내와 SHA-256 값 명시
 
 ## GUI·경로
 
@@ -121,7 +123,7 @@ SHA-256은 깨끗한 태그 빌드 뒤 `QuickAccess.release.json`과 GitHub Rele
 - [ ] `api.github.com` 접근이 사내 방화벽에 막혀도 시작 지연·오류 토스트 없음
 - [ ] 향후 수동 확인 UI 추가 시 최신/업데이트 있음/오프라인/응답 오류 구분
 - [ ] 다른 호스트·저장소·태그의 Release 및 EXE URL이 결과에서 제거됨
-- [ ] `QuickAccess.release.json`의 버전·크기·SHA-256·서명 상태가 최종 EXE와 일치
+- [x] `QuickAccess.release.json`의 버전·크기·SHA-256·서명 상태가 최종 EXE와 일치
 
 ## 실제 파일 아이콘 (실기기 검증 필수)
 
