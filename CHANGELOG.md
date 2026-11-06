@@ -2,7 +2,7 @@
 
 이 프로젝트는 [Semantic Versioning](https://semver.org/)을 따릅니다.
 
-## 3.0.0 — 배포 전
+## 3.0.0 — 2026-11-06
 
 ### 바뀐 점
 

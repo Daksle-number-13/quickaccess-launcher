@@ -6,18 +6,20 @@
 ## 다운로드
 
 [GitHub Releases](https://github.com/Daksle-number-13/quickaccess-launcher/releases)에서
-`QuickAccess.exe`를 다운로드하면 별도의 Python 설치 없이 바로 실행할 수
-있습니다. Windows 10/11 x64를 지원합니다.
+`QuickAccess.exe`를 다운로드하면 설치 없이 바로 실행할 수 있습니다. Windows 10/11
+x64를 지원하며, Python이나 Visual C++ 재배포 패키지가 필요하지 않습니다.
 
-현재 공개판은 **v2.0.2 (2026-09-07)**입니다. 최신 버전 페이지에서
-`QuickAccess.exe`, 무결성 manifest와 제3자 라이선스 묶음을 함께 받을 수 있습니다.
+현재 공개판은 **v3.0.0 (2026-11-06)**입니다. 앱 전체를 Rust로 다시 만든 버전으로,
+기존 설정을 그대로 쓰며 실행이 약 16배 빠르고 EXE는 약 1/10 크기입니다. 최신 버전
+페이지에서 `QuickAccess.exe`, 무결성 manifest와 제3자 라이선스 묶음을 함께 받을 수
+있습니다.
 
-- [v2.0.2 QuickAccess.exe 바로 받기](https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v2.0.2/QuickAccess.exe)
-- [v2.0.2 Release 및 변경 내용](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v2.0.2)
+- [v3.0.0 QuickAccess.exe 바로 받기](https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v3.0.0/QuickAccess.exe)
+- [v3.0.0 Release 및 변경 내용](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v3.0.0)
+- 이전 Python 판: [v2.0.2](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v2.0.2)
 
-다음 버전 **v3.0.0**은 앱 전체를 Rust로 다시 만든 버전으로, 배포 준비 중입니다.
-기존 설정을 그대로 쓰며 실행이 약 16배 빠르고 EXE는 약 1/10 크기입니다. 소스는
-[`rust/`](rust/README.md)에 있고, 바뀐 점은 [변경 기록](CHANGELOG.md)에 정리했습니다.
+Rust 소스는 [`rust/`](rust/README.md)에 있고, 바뀐 점은 [변경 기록](CHANGELOG.md)에
+정리했습니다.
 
 처음 사용하는 분은 실제 화면이 포함된
 [QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
@@ -152,6 +154,15 @@ JSON도 변경되지 않습니다.
 실행하면 자동 실행이 켜진 경우 다음 부팅 경로도 새 EXE 위치로 복구됩니다.
 
 ## 테스트
+
+v3 (Rust) 판은 `rust` 폴더에서 다음을 실행합니다. Python 판의 결과를 기록한
+답안과 비교하는 일치 테스트도 함께 돌아갑니다.
+
+```powershell
+cargo test --locked
+```
+
+아래는 v2.x Python 판의 검사입니다.
 
 ```powershell
 python -m pytest -q -p no:cacheprovider
