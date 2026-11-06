@@ -10,9 +10,14 @@
 - [x] 실제 사용자 PC에서 Rust 빌드 상주 실행 — 단축키·검색·등록 사용 확인 (사용자 확인)
 - [x] 문서용 화면 4장을 Rust 화면으로 교체, 소개 HTML 이미지 크기·버전 갱신
 - [x] 쉬운 사용 설명서 v3.0.0 재생성, A4 8쪽 전체 렌더 검수
-- [ ] GitHub 자동 검사(Python·Rust 작업) 통과
-- [ ] 깨끗한 `v3.0.0` 태그에서 최종 release-eligible 빌드
-- [ ] GitHub Release에 EXE·manifest·라이선스 ZIP 업로드 후 재다운로드 hash 확인
+- [x] [GitHub 자동 검사](https://github.com/Daksle-number-13/quickaccess-launcher/actions/runs/42164811357)(Python·Rust 작업) 통과
+- [x] 깨끗한 `v3.0.0` 태그에서 최종 release-eligible 빌드
+- [x] GitHub Release에 EXE·manifest·라이선스 ZIP 업로드 후 재다운로드 hash 확인
+
+최종 빌드는 `3.0.0.0`, Authenticode `NotSigned`이며, 소스 커밋은
+`74b8d1f1fe819f6b8c3ace8efeea1fbeb83ad269`입니다. EXE 크기는 1,635,328바이트,
+SHA-256은 `2112FBB67656BD7E86DE6ED8625509EE9CDBA7050F8E4C72BD13DB836E2075CC`입니다.
+이 값은 `QuickAccess.release.json` 및 [공개 릴리스](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v3.0.0)와 일치합니다.
 
 확인하지 못한 항목: 혼합 DPI 다중 모니터, Visual C++ 재배포 패키지가 없는 별도
 PC, 회사 보안 프로그램 환경. 성능 수치는 Windows 세션이 잠긴 상태에서 측정했습니다.
