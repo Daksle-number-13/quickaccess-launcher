@@ -182,6 +182,8 @@ pub struct App {
     toast_generation: u64,
     stopping: bool,
     smoke_test: bool,
+    /// Screenshots show this instead of the machine's real Run value.
+    preview_startup: Option<RegistrationStatus>,
     integration_attempts: usize,
     outage_notified: bool,
     events: Receiver<Event>,
@@ -351,6 +353,7 @@ pub fn install(store: ConfigStore, load: LoadResult, options: &RunOptions) -> wi
         toast_generation: 0,
         stopping: false,
         smoke_test: options.smoke_test,
+        preview_startup: None,
         integration_attempts: 0,
         outage_notified: false,
         events,
@@ -822,6 +825,9 @@ impl App {
     }
 
     fn startup_status_now(&mut self) -> RegistrationStatus {
+        if let Some(preview) = &self.preview_startup {
+            return preview.clone();
+        }
         let (executable, arguments) = startup_invocation();
         let status = self.startup.inspect(self.config.run_on_startup, &executable, &arguments);
         self.startup_status = Some(status.clone());
@@ -1715,6 +1721,22 @@ pub mod dev {
     pub fn capture_all(directory: &std::path::Path) -> Result<(), String> {
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
         pump_for(900);
+        // Registration used the isolated F23/F24 keys; screenshots show the
+        // shipped defaults. Only the in-memory copy changes.
+        with_app(|app| {
+            app.config.hotkey = crate::model::DEFAULT_HOTKEY.to_string();
+            app.config.quick_add_hotkey = crate::model::DEFAULT_QUICK_ADD_HOTKEY.to_string();
+            // The default is on; the isolated run turned it off. Show the state
+            // a normal installation has instead of this machine's Run value.
+            app.config.run_on_startup = true;
+            app.preview_startup = Some(RegistrationStatus {
+                state: crate::startup_rules::RegistrationState::Correct,
+                desired_enabled: true,
+                expected_command: String::new(),
+                actual_command: None,
+                error: None,
+            });
+        });
         for (mode, suffix) in [(AppearanceMode::Light, "light"), (AppearanceMode::Dark, "dark")] {
             with_app(|app| app.set_appearance(mode));
             with_app(App::open_panel);

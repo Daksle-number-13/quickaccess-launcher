@@ -33,10 +33,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quickaccess import __author__ as APP_AUTHOR  # noqa: E402
-from quickaccess import __version__ as APP_VERSION  # noqa: E402
+import re  # noqa: E402
+
+# The released app is the Rust port; its crate version is the app version.
+APP_VERSION = re.search(
+    r'^version\s*=\s*"([^"]+)"', (ROOT / "rust" / "Cargo.toml").read_text(encoding="utf-8"), re.MULTILINE
+).group(1)
 
 
-RELEASE_DATE = "2026-09-07"
+RELEASE_DATE = "2026-11-06"
 OUTPUT = ROOT / "output" / "pdf" / "QuickAccess_Easy_Manual_KO.pdf"
 POPUP_SCREENSHOT = ROOT / "docs" / "screenshots" / "quickaccess-popup-light.png"
 SETTINGS_SCREENSHOT = ROOT / "docs" / "screenshots" / "quickaccess-settings-light.png"
@@ -334,16 +339,16 @@ def build_story() -> list[Flowable]:
     story.extend(page_header("2. 빠른 실행 패널 사용하기", "가장 자주 쓰는 화면"))
     story.extend(
         [
-            screenshot(POPUP_SCREENSHOT, CONTENT_WIDTH, "Ctrl + Space를 눌렀을 때 나타나는 실제 패널"),
+            screenshot(POPUP_SCREENSHOT, CONTENT_WIDTH * 0.8, "Ctrl + Space를 눌렀을 때 나타나는 실제 패널"),
             step(1, "항목 열기", "원하는 카드를 클릭하면 파일이나 폴더는 Windows 탐색기/연결 프로그램으로, 웹 링크는 기본 브라우저로 열립니다."),
             Spacer(1, 2.5 * mm),
             step(2, "검색하고 키보드로 선택", "검색창에 이름, 경로, 웹사이트 주소 또는 한글 초성을 입력하세요. 방향키와 Home, End, Page Up/Down으로 이동하고 Enter 또는 Space를 누르면 열립니다."),
             Spacer(1, 2.5 * mm),
             step(3, "설정 열기", "패널 오른쪽 위의 톱니바퀴 아이콘을 누르면 항목을 추가하거나 순서를 바꿀 수 있습니다."),
             Spacer(1, 3 * mm),
-            note("v2.0.2 위치 동작", "단축키 요청이 처리되는 동안 커서를 빠르게 다른 모니터로 옮겨도 실제 표시 직전의 위치를 사용합니다. 화면 가장자리에서는 패널 전체가 작업 영역 안에 남도록 자동 보정합니다.", tone="blue"),
+            note("패널 위치", "단축키 요청이 처리되는 동안 커서를 빠르게 다른 모니터로 옮겨도 실제 표시 직전의 위치를 사용합니다. 화면 가장자리에서는 패널 전체가 작업 영역 안에 남도록 자동 보정합니다.", tone="blue"),
             Spacer(1, 2.5 * mm),
-            note("경고색 ! 카드가 보이면", "파일이나 폴더의 위치를 찾을 수 없다는 뜻입니다. 해당 카드를 누르고 새 위치를 지정하세요. 웹 링크는 인터넷 연결 여부와 관계없이 등록 상태를 유지합니다.", tone="amber"),
+            note("빨간 '경로 없음' 카드가 보이면", "파일이나 폴더의 위치를 찾을 수 없다는 뜻입니다. 해당 카드를 누르고 새 위치를 지정하세요. 웹 링크는 인터넷 연결 여부와 관계없이 등록 상태를 유지합니다.", tone="amber"),
             PageBreak(),
         ]
     )
@@ -492,7 +497,7 @@ def build_story() -> list[Flowable]:
         ("설정 창의 X를 눌렀는데 계속 실행돼요", "정상 동작입니다. QuickAccess는 트레이에 상주해야 단축키를 받을 수 있습니다."),
         ("앱을 다시 실행했는데 창만 떠요", "정상 동작입니다. 이미 상주 중이면 새 프로세스를 남기지 않고 기존 앱에 패널 표시 요청을 전달합니다."),
         ("새 버전으로 바꾸고 싶어요", "구버전을 트레이에서 완전히 종료한 뒤 새 EXE를 최종 위치에 두고 한 번 실행하세요. 자동 실행이 켜져 있으면 다음 부팅 경로도 새 EXE로 복구됩니다."),
-        ("경고색 ! 카드가 보여요", "파일이 이동 또는 삭제되었거나 네트워크 드라이브가 연결되지 않은 상태입니다. 카드를 눌러 새 경로를 지정하세요."),
+        ("빨간 '경로 없음' 카드가 보여요", "파일이 이동 또는 삭제되었거나 네트워크 드라이브가 연결되지 않은 상태입니다. 카드를 눌러 새 경로를 지정하세요."),
         ("웹 링크가 열리지 않아요", "인터넷 연결과 Windows 기본 브라우저 설정을 확인한 뒤 설정에서 주소를 다시 확인하세요."),
         ("설정을 옮기거나 되돌리고 싶어요", "앱 정보의 설정 내보내기·가져오기를 사용하세요. 앱은 <font name='Consolas'>%APPDATA%\\QuickAccess</font>에도 직전 설정과 제한된 손상 복구본을 보관합니다."),
         ("로그가 필요해요", "<font name='Consolas'>%LOCALAPPDATA%\\QuickAccess\\logs\\quickaccess.log</font>에서 오류 기록을 확인할 수 있습니다."),

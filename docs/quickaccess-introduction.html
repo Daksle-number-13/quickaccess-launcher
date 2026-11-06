@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="QuickAccess Launcher v2.0.2의 빠른 호출, 안정적인 아이콘·경로 검사, 자동 실행 복구와 실제 사용 흐름을 소개합니다.">
+  <meta name="description" content="QuickAccess Launcher v3.0.0의 빠른 호출, 안정적인 아이콘·경로 검사, 자동 실행 복구와 실제 사용 흐름을 소개합니다.">
   <meta name="theme-color" content="#0b63e5">
   <title>QuickAccess Launcher | 자주 쓰는 파일·폴더·링크를 한 번에</title>
   <link rel="icon" type="image/png" href="../assets/quickaccess-mark.png">
@@ -1076,7 +1076,7 @@
             <div class="window-bar" aria-hidden="true">
               <span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span>
             </div>
-            <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" fetchpriority="high" alt="폴더, 파일, 웹 링크 카드가 표시된 QuickAccess 빠른 실행 패널">
+            <img src="screenshots/quickaccess-popup-light.png" width="896" height="592" fetchpriority="high" alt="폴더, 파일, 웹 링크 카드가 표시된 QuickAccess 빠른 실행 패널">
           </div>
           <div class="floating-card"><strong>Ctrl + Space</strong>앱 실행 중 커서가 있는 화면에 표시</div>
         </div>
@@ -1086,14 +1086,13 @@
     <div class="container trust-strip" aria-label="제품 핵심 정보">
       <div class="trust-grid">
         <div class="trust-item"><strong>Portable EXE</strong><span>설치 과정 없이 바로 실행</span></div>
-        <div class="trust-item"><strong>빠른 상주 호출</strong><span>v2.0.2 실측 p95 12.7ms</span></div>
+        <div class="trust-item"><strong>빠른 상주 호출</strong><span>v3.0.0 실측 p95 약 6ms</span></div>
         <div class="trust-item"><strong>로컬 우선</strong><span>바로가기 정보는 PC에 저장</span></div>
         <div class="trust-item"><strong>한글·멀티모니터</strong><span>혼합 DPI와 한글 경로 지원</span></div>
       </div>
       <aside class="evidence-note" aria-label="성능 측정 안내">
         <strong>실제 릴리스 PC 측정</strong>
-        <span>v2.0.2를 실제 100%·200%·100% 혼합 배율 3모니터 PC에서 측정한 결과, 상주 상태의 명령 발행부터 창 노출 신호까지 p95 12.7ms, 안정화까지 p95 14.1ms였습니다. 전체 36/36회가 성공했고 렌더 재생성과 지연 재표시는 0회였습니다. 첫 픽셀 합성 시간은 아니며 PC·보안 프로그램·화면 구성에 따라 달라질 수 있습니다. <a href="PERFORMANCE.md">측정 조건 보기</a></span>
-      </aside>
+        <<span>v3.0.0은 Rust로 다시 만든 네이티브 앱입니다. 같은 PC에서 상주 상태의 명령 발행부터 창 노출까지 항목 20개 기준 p95 약 5~6ms, 200개 기준 약 7~8ms였고, 실행부터 사용 가능까지는 중앙값 143ms(v2.0.2는 2,353ms)였습니다. 첫 픽셀 합성 시간은 아니며 PC·보안 프로그램·화면 구성에 따라 달라질 수 있습니다. <a href="PERFORMANCE.md">측정 조건 보기</a></span>      </aside>
     </div>
 
     <section aria-labelledby="problem-title">
@@ -1187,26 +1186,26 @@
         </div>
         <div class="showcase-grid">
           <figure class="shot-card">
-            <a class="shot-media" style="--shot-ratio: 896 / 440" href="screenshots/quickaccess-popup-light.png" target="_blank" rel="noopener noreferrer" aria-label="빠른 실행 패널 원본 화면 크게 보기">
-              <img src="screenshots/quickaccess-popup-light.png" width="896" height="440" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
+            <a class="shot-media" style="--shot-ratio: 896 / 592" href="screenshots/quickaccess-popup-light.png" target="_blank" rel="noopener noreferrer" aria-label="빠른 실행 패널 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-popup-light.png" width="896" height="592" loading="lazy" decoding="async" alt="QuickAccess 빠른 실행 패널 예시 화면">
             </a>
             <figcaption class="shot-copy"><h3>빠른 실행 패널 · 실제 캡처</h3><p>검색창에서 이름·경로·URL을 좁히고, 마우스 또는 방향키와 Enter로 원하는 항목을 실행합니다.</p></figcaption>
           </figure>
           <figure class="shot-card">
-            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
-              <img src="screenshots/quickaccess-settings-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
+            <a class="shot-media" style="--shot-ratio: 2000 / 1400" href="screenshots/quickaccess-settings-light.png" target="_blank" rel="noopener noreferrer" aria-label="환경 설정 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-light.png" width="2000" height="1400" loading="lazy" decoding="async" alt="QuickAccess 환경 설정 예시 화면">
             </a>
             <figcaption class="shot-copy"><h3>환경 설정 · 바로가기</h3><p>v2.0.2는 긴 한 화면 대신 목적별 네 화면으로 이동합니다. 좁은 창에서도 선택한 화면만 자연스럽게 스크롤됩니다.</p><div class="settings-groups" aria-label="v2.0.2 환경 설정 화면 구성"><span>바로가기</span><span>단축키·시작</span><span>화면·패널</span><span>앱 정보</span></div></figcaption>
           </figure>
           <figure class="shot-card">
-            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-shortcuts-light.png" target="_blank" rel="noopener noreferrer" aria-label="단축키와 시작 설정 원본 화면 크게 보기">
-              <img src="screenshots/quickaccess-settings-shortcuts-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess 단축키와 Windows 자동 실행 설정 화면">
+            <a class="shot-media" style="--shot-ratio: 2000 / 1400" href="screenshots/quickaccess-settings-shortcuts-light.png" target="_blank" rel="noopener noreferrer" aria-label="단축키와 시작 설정 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-shortcuts-light.png" width="2000" height="1400" loading="lazy" decoding="async" alt="QuickAccess 단축키와 Windows 자동 실행 설정 화면">
             </a>
             <figcaption class="shot-copy"><h3>환경 설정 · 단축키·시작</h3><p>두 전역 단축키를 바꾸고 Windows 자동 실행의 희망 설정과 실제 등록 상태를 같은 화면에서 확인합니다.</p></figcaption>
           </figure>
           <figure class="shot-card">
-            <a class="shot-media" style="--shot-ratio: 2004 / 1460" href="screenshots/quickaccess-settings-about-light.png" target="_blank" rel="noopener noreferrer" aria-label="앱 정보 원본 화면 크게 보기">
-              <img src="screenshots/quickaccess-settings-about-light.png" width="2004" height="1460" loading="lazy" decoding="async" alt="QuickAccess Version 2.0.2와 만든 사람 Daksle이 표시된 앱 정보 화면">
+            <a class="shot-media" style="--shot-ratio: 2000 / 1400" href="screenshots/quickaccess-settings-about-light.png" target="_blank" rel="noopener noreferrer" aria-label="앱 정보 원본 화면 크게 보기">
+              <img src="screenshots/quickaccess-settings-about-light.png" width="2000" height="1400" loading="lazy" decoding="async" alt="QuickAccess Version 3.0.0과 만든 사람 Daksle이 표시된 앱 정보 화면">
             </a>
             <figcaption class="shot-copy"><h3>환경 설정 · 앱 정보</h3><p>Version 2.0.2, 만든 사람 Daksle, 업데이트 확인, 설정 가져오기·내보내기, 진단 정보 복사와 앱 종료를 제공합니다.</p></figcaption>
           </figure>
@@ -1234,7 +1233,7 @@
               <div class="demo-desktop-icon">품질 문서</div>
               <div class="demo-taskbar"></div>
               <div class="key-combo key-open"><kbd>Ctrl</kbd><b>+</b><kbd>Space</kbd></div>
-              <img class="demo-popup" src="screenshots/quickaccess-popup-light.png" width="896" height="440" alt="">
+              <img class="demo-popup" src="screenshots/quickaccess-popup-light.png" width="896" height="592" alt="">
               <span class="demo-pointer pointer-open"></span>
               <span class="click-pulse click-open"></span>
 

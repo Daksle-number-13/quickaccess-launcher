@@ -333,6 +333,11 @@ pub fn set_edit_palette(palette: &Palette) {
     EDIT_STYLE.with(|style| style.set((text, background, brush)));
 }
 
+/// The text color edit controls currently paint with, as a COLORREF.
+pub fn edit_text_colorref() -> u32 {
+    EDIT_STYLE.with(std::cell::Cell::get).0
+}
+
 /// The `WM_CTLCOLOREDIT` response for every edit control in the app.
 pub fn edit_colors(wparam: WPARAM) -> LRESULT {
     let (text, background, brush) = EDIT_STYLE.with(std::cell::Cell::get);

@@ -1,6 +1,23 @@
 # QuickAccess 릴리스 체크리스트
 
-## 자동 검증
+## v3.0.0 (Rust)
+
+- [x] `cargo test --locked` — 140개 통과, Python 기록 답안과의 일치 테스트 8개 포함
+- [x] 기존 Python 테스트 `python -m pytest -q` — 317개 통과 (v2 코드 유지 확인)
+- [x] `build-rust.ps1 -Clean -SmokeTest -AllowDirty` 확인 빌드 — 3.0.0.0, 스모크 종료 코드 0
+- [x] EXE에 빌드 PC 경로·사용자 이름 없음, `VCRUNTIME140.dll` 의존 없음
+- [x] 라이선스 ZIP 64개 항목(Rust 의존성 30개 원문) 생성, schema 2 manifest 일치
+- [x] 실제 사용자 PC에서 Rust 빌드 상주 실행 — 단축키·검색·등록 사용 확인 (사용자 확인)
+- [x] 문서용 화면 4장을 Rust 화면으로 교체, 소개 HTML 이미지 크기·버전 갱신
+- [x] 쉬운 사용 설명서 v3.0.0 재생성, A4 8쪽 전체 렌더 검수
+- [ ] GitHub 자동 검사(Python·Rust 작업) 통과
+- [ ] 깨끗한 `v3.0.0` 태그에서 최종 release-eligible 빌드
+- [ ] GitHub Release에 EXE·manifest·라이선스 ZIP 업로드 후 재다운로드 hash 확인
+
+확인하지 못한 항목: 혼합 DPI 다중 모니터, Visual C++ 재배포 패키지가 없는 별도
+PC, 회사 보안 프로그램 환경. 성능 수치는 Windows 세션이 잠긴 상태에서 측정했습니다.
+
+## v2.0.2 자동 검증
 
 - [x] [배포 및 업데이트 정책](docs/RELEASE.md)의 통제된 빌드 조건 확인
 - [x] `python devtools/check_release_metadata.py` — 버전·의존성·CI·one-file 명세 일치
