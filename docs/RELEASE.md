@@ -1,8 +1,35 @@
 # QuickAccess 배포 및 업데이트 정책
 
-## 통제된 one-file 빌드
+## v3 (Rust) 빌드
 
-공개 EXE는 저장소 루트에서 다음처럼 만듭니다.
+v3.0.0부터 공개 EXE는 Rust로 만듭니다. Rust(MSVC 도구 모음)와 Windows SDK,
+그리고 라이선스 묶음과 매니페스트를 만들 Python 3가 필요합니다.
+
+```powershell
+git tag v3.0.0
+.\build-rust.ps1 -Clean -SmokeTest
+```
+
+`build-rust.ps1`은 다음을 확인합니다.
+
+- `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/resources/quickaccess.rc`의 버전 일치
+- 깨끗한 작업 폴더와 정확한 `v버전` 태그 (`-AllowDirty`가 없을 때)
+- `cargo test --locked` 전체 통과 (`-SkipTests`는 `-AllowDirty`에서만 허용)
+- EXE 파일 버전, VC++ 런타임 의존 없음, 빌드 PC 경로가 남지 않았는지
+- `--smoke-test` 실행의 종료 코드 0과 제한 시간
+
+빌드 결과물은 `build\rust-target`에 따로 만듭니다. 그래서 개발용
+`rust\target\release\QuickAccess.exe`가 실행 중이어도 빌드가 막히지 않습니다.
+산출물 세 파일과 매니페스트 형식은 아래 v2 규칙과 같고, 매니페스트의 `build`
+항목에는 Python·PyInstaller 대신 `implementation: "rust"`, Rust 버전, 대상
+플랫폼이 기록됩니다. 서명은 같은 `sign.ps1`로 합니다.
+
+Rust 컴파일러는 같은 소스와 도구 버전이면 결과를 대부분 재현하지만, 비트 단위
+동일성은 보장하지 않습니다. 공개 배포에서는 항상 SHA-256으로 확인합니다.
+
+## v2 (Python) 통제된 one-file 빌드
+
+아래는 v2.x Python 빌드 규칙입니다. v2.x EXE는 저장소 루트에서 다음처럼 만듭니다.
 
 ```powershell
 .\build.ps1 -Clean -SmokeTest -PythonExecutable C:\path\to\python.exe

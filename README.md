@@ -15,6 +15,10 @@
 - [v2.0.2 QuickAccess.exe 바로 받기](https://github.com/Daksle-number-13/quickaccess-launcher/releases/download/v2.0.2/QuickAccess.exe)
 - [v2.0.2 Release 및 변경 내용](https://github.com/Daksle-number-13/quickaccess-launcher/releases/tag/v2.0.2)
 
+다음 버전 **v3.0.0**은 앱 전체를 Rust로 다시 만든 버전으로, 배포 준비 중입니다.
+기존 설정을 그대로 쓰며 실행이 약 16배 빠르고 EXE는 약 1/10 크기입니다. 소스는
+[`rust/`](rust/README.md)에 있고, 바뀐 점은 [변경 기록](CHANGELOG.md)에 정리했습니다.
+
 처음 사용하는 분은 실제 화면이 포함된
 [QuickAccess 쉬운 사용 설명서](output/pdf/QuickAccess_Easy_Manual_KO.pdf)를
 따라 하면 됩니다.
@@ -193,6 +197,16 @@ Poppler의 `pdftoppm` 등으로 모든 페이지를 PNG로 렌더링해 글자 �
 브라우저에서 열어 네 화면 이미지, 내부 링크와 두 자동 재생 예시를 점검합니다.
 
 ## 단일 EXE 빌드
+
+v3 (Rust) 빌드는 Rust(MSVC)와 Windows SDK, Python 3가 있으면 됩니다. 릴리스
+조건과 검사 항목은 [배포 정책](docs/RELEASE.md)에 있습니다.
+
+```powershell
+.\build-rust.ps1 -Clean -SmokeTest              # v3 공개 빌드 (v버전 태그 필요)
+.\build-rust.ps1 -Clean -SmokeTest -AllowDirty  # 태그 없는 확인용 빌드
+```
+
+아래는 v2.x Python 빌드입니다.
 
 ```powershell
 .\build.ps1 -Clean -SmokeTest -PythonExecutable C:\path\to\python.exe

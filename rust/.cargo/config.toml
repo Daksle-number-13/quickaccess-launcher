@@ -1,0 +1,5 @@
+# Link the C runtime statically so the EXE starts on PCs without the
+# Visual C++ Redistributable. build-rust.ps1 repeats this flag because its
+# RUSTFLAGS replace this table.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

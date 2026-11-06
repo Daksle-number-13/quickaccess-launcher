@@ -11,6 +11,11 @@ cargo test                     # unit tests and Python parity tests
 cargo build --release          # target\release\QuickAccess.exe
 ```
 
+`.cargo/config.toml` links the C runtime statically, so the EXE runs without the
+Visual C++ Redistributable. Public builds come from `..\build-rust.ps1`, which
+also strips local paths and writes the release manifest and license bundle;
+see `docs/RELEASE.md`.
+
 | Option | Purpose |
 | --- | --- |
 | `--smoke-test` | Isolated start and clean exit, with a temporary config and `ctrl+alt+f23/f24` |
