@@ -1,0 +1,34 @@
+#pragma code_page(65001)
+#include <winres.h>
+
+1 ICON "../../assets/quickaccess.ico"
+1 24 "quickaccess.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 3,0,0,0
+ PRODUCTVERSION 3,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204B0"
+        BEGIN
+            VALUE "CompanyName", "Daksle"
+            VALUE "FileDescription", "QuickAccess Launcher"
+            VALUE "FileVersion", "3.0.0.0"
+            VALUE "InternalName", "QuickAccess"
+            VALUE "LegalCopyright", "Copyright 2026 Daksle"
+            VALUE "OriginalFilename", "QuickAccess.exe"
+            VALUE "ProductName", "QuickAccess Launcher"
+            VALUE "ProductVersion", "3.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x412, 1200
+    END
+END

@@ -29,3 +29,5 @@ tmp/
 devtools/*-preview.png
 Thumbs.db
 .DS_Store
+
+rust/target/

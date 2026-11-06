@@ -58,3 +58,21 @@ jobs:
       - name: Build and smoke-test one-file executable
         shell: pwsh
         run: .\build.ps1 -Clean -SmokeTest -PythonExecutable python -AllowDirty -SkipTests
+
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Test the Rust port
+        shell: pwsh
+        run: cargo test --locked --manifest-path rust/Cargo.toml
+
+      - name: Build and smoke-test the release executable
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path rust/Cargo.toml
+          $process = Start-Process rust/target/release/QuickAccess.exe -ArgumentList "--smoke-test" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
